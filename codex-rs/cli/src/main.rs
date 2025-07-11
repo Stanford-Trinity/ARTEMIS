@@ -334,32 +334,71 @@ async fn run_autonomous_mode(
             
             println!("🤖 Codex response collected");
             
-            // Add assistant message to conversation log
-            let mut assistant_message = serde_json::json!({
-                "role": "assistant",
-                "content": codex_response
-            });
+            // Add events in correct chronological order:
             
-            // Add reasoning if present
+            // 1. Assistant reasoning (if present)
             if let Some(reasoning_text) = reasoning {
-                assistant_message["reasoning"] = serde_json::json!(reasoning_text);
+                conversation_log.push(serde_json::json!({
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning": reasoning_text
+                }));
             }
             
-            // Add tool calls if any
+            // 2. Assistant tool calls (if any)
             if !tool_calls.is_empty() {
-                assistant_message["tool_calls"] = serde_json::json!(tool_calls);
+                conversation_log.push(serde_json::json!({
+                    "role": "assistant", 
+                    "content": "",
+                    "tool_calls": tool_calls
+                }));
             }
-            conversation_log.push(assistant_message);
             
-            // Add tool responses to conversation log
+            // 3. Tool responses
             for tool_response in tool_responses {
                 conversation_log.push(tool_response);
             }
             
-            // Add to context
-            context.push_str(&format!("\n--- Iteration {} ---\n", iteration));
-            context.push_str(&format!("User Prompt: {}\n", user_prompt));
-            context.push_str(&format!("Codex Response: {}\n", codex_response));
+            // 4. Final assistant response
+            conversation_log.push(serde_json::json!({
+                "role": "assistant",
+                "content": codex_response
+            }));
+            
+            // Build readable conversation context
+            let mut readable_context = String::new();
+            for msg in &conversation_log {
+                match msg.get("role").and_then(|r| r.as_str()) {
+                    Some("system") => {
+                        readable_context.push_str(&format!("SYSTEM: {}\n\n", 
+                            msg.get("content").and_then(|c| c.as_str()).unwrap_or("")));
+                    }
+                    Some("user") => {
+                        readable_context.push_str(&format!("USER: {}\n\n", 
+                            msg.get("content").and_then(|c| c.as_str()).unwrap_or("")));
+                    }
+                    Some("assistant") => {
+                        if let Some(reasoning) = msg.get("reasoning") {
+                            readable_context.push_str(&format!("ASSISTANT_REASONING: {}\n\n", 
+                                reasoning.as_str().unwrap_or("")));
+                        } else if let Some(tool_calls) = msg.get("tool_calls") {
+                            readable_context.push_str(&format!("ASSISTANT_TOOL_CALLS: {}\n\n", 
+                                serde_json::to_string_pretty(tool_calls).unwrap_or_default()));
+                        } else {
+                            readable_context.push_str(&format!("ASSISTANT: {}\n\n", 
+                                msg.get("content").and_then(|c| c.as_str()).unwrap_or("")));
+                        }
+                    }
+                    Some("tool") => {
+                        readable_context.push_str(&format!("TOOL_RESPONSE: {}\n\n", 
+                            msg.get("content").and_then(|c| c.as_str()).unwrap_or("")));
+                    }
+                    _ => {
+                        // Skip unknown roles
+                    }
+                }
+            }
+            context = readable_context;
             
             // Save checkpoint after each iteration
             save_checkpoint(&conversation_log, iteration as u32);
@@ -455,35 +494,36 @@ async fn collect_codex_response_with_tools(codex: &codex_core::Codex, submission
                                         println!("🤖 External LLM response: {}", response);
                                         let (approved, reasoning) = parse_approval_response(&response);
                                         
-                                        // Send approval/denial message to codex regardless of decision
-                                        let approval_message = if approved {
+                                        if approved {
                                             println!("✅ Bugcrowd submission approved by external LLM: {}", reasoning);
-                                            format!("✅ Bugcrowd submission approved by security review: {}", reasoning)
+                                            // Let the tool call proceed normally
                                         } else {
                                             println!("❌ Bugcrowd submission denied by external LLM: {}", reasoning);
-                                            format!("❌ Bugcrowd submission denied by security review: {}", reasoning)
-                                        };
-                                        
-                                        if let Err(e) = codex.submit(codex_core::protocol::Op::UserInput {
-                                            items: vec![codex_core::protocol::InputItem::Text { text: approval_message }]
-                                        }).await {
-                                            println!("❌ Failed to send approval message to codex: {}", e);
+                                            
+                                            // Create a fake tool response with the denial reasoning
+                                            // This prevents the actual MCP tool from being called
+                                            tool_responses.push(serde_json::json!({
+                                                "role": "tool",
+                                                "tool_call_id": tool.call_id,
+                                                "content": format!("❌ Bugcrowd submission denied by security review: {}", reasoning)
+                                            }));
+                                            
+                                            // Skip to next event - don't let this tool call proceed
+                                            continue;
                                         }
                                     }
                                     Err(e) => {
                                         println!("❌ Error getting approval from external LLM: {}", e);
                                         
-                                        // Send error message to codex
-                                        let error_message = format!(
-                                            "The bugcrowd_submit tool call could not be approved due to an error: {}",
-                                            e
-                                        );
+                                        // Create a tool response with the error
+                                        tool_responses.push(serde_json::json!({
+                                            "role": "tool",
+                                            "tool_call_id": tool.call_id,
+                                            "content": format!("❌ Bugcrowd submission failed due to approval error: {}", e)
+                                        }));
                                         
-                                        if let Err(e) = codex.submit(codex_core::protocol::Op::UserInput {
-                                            items: vec![codex_core::protocol::InputItem::Text { text: error_message }]
-                                        }).await {
-                                            println!("❌ Failed to send error message to codex: {}", e);
-                                        }
+                                        // Skip to next event - don't let this tool call proceed
+                                        continue;
                                     }
                                 }
                             }
