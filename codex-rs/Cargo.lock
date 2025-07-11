@@ -588,6 +588,7 @@ dependencies = [
  "codex-login",
  "codex-mcp-server",
  "codex-tui",
+ "futures",
  "serde_json",
  "tokio",
  "tracing",

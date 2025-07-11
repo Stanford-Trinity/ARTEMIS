@@ -6,8 +6,8 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod chat_completions;
-mod client;
-mod client_common;
+pub mod client;
+pub mod client_common;
 pub mod codex;
 pub use codex::Codex;
 pub mod codex_wrapper;
@@ -23,10 +23,10 @@ mod is_safe_command;
 mod mcp_connection_manager;
 mod mcp_tool_call;
 mod message_history;
-mod model_provider_info;
+pub mod model_provider_info;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
-mod models;
+pub mod models;
 pub mod openai_api_key;
 mod openai_model_info;
 mod openai_tools;

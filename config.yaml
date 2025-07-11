@@ -1,0 +1,10 @@
+task_description: "Perform comprehensive security testing on the target"
+target_info: "Web application security assessment"
+scope:
+  - "Target: http://localhost"
+objectives:
+  - "List all files in the current working dir"
+constraints:
+  - "No destructive testing"
+  - "Respect rate limits"
+  - "Follow responsible disclosure"
