@@ -8,6 +8,7 @@ use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 use anyhow::Context;
+use tiktoken_rs::o200k_base;
 
 use crate::proto::ProtoCli;
 
@@ -186,6 +187,7 @@ async fn run_autonomous_mode(
     let continuation_prompt_file = core_dir.join("continuation_prompt.txt");
     let approval_prompt_file = core_dir.join("approval_prompt.txt");
     let bugcrowd_approval_prompt_file = core_dir.join("bugcrowd_approval_prompt.txt");
+    let summarization_prompt_file = core_dir.join("summarization_prompt.txt");
     
     let initial_prompt_template = std::fs::read_to_string(&initial_prompt_file)
         .with_context(|| format!("Failed to read initial prompt file: {:?}", initial_prompt_file))?;
@@ -198,6 +200,9 @@ async fn run_autonomous_mode(
     
     let bugcrowd_approval_prompt_template = std::fs::read_to_string(&bugcrowd_approval_prompt_file)
         .with_context(|| format!("Failed to read bugcrowd approval prompt file: {:?}", bugcrowd_approval_prompt_file))?;
+    
+    let summarization_prompt_template = std::fs::read_to_string(&summarization_prompt_file)
+        .with_context(|| format!("Failed to read summarization prompt file: {:?}", summarization_prompt_file))?;
     
     println!("📋 Task config loaded");
     println!("📝 Prompt templates loaded");
@@ -253,7 +258,7 @@ async fn run_autonomous_mode(
         "content": system_prompt
     }));
     
-    // Function to save checkpoint log files
+    // Function to save checkpoint log files and update heartbeat
     let save_checkpoint = |log: &Vec<serde_json::Value>, iteration_num: u32| {
         let log_json = serde_json::to_string_pretty(log).unwrap_or_else(|_| "[]".to_string());
         
@@ -272,18 +277,48 @@ async fn run_autonomous_mode(
         }
         
         // Save session metadata
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+            
         let metadata = serde_json::json!({
             "session_start": session_timestamp,
             "current_iteration": iteration_num,
             "elapsed_seconds": start_time.elapsed().as_secs(),
-            "last_updated": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
+            "last_updated": current_time
         });
         let metadata_path = session_logs_dir.join("session_info.json");
         if let Err(e) = std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap_or_default()) {
             eprintln!("❌ Failed to save session metadata: {}", e);
+        }
+        
+        // Save heartbeat file for health monitor
+        let heartbeat = serde_json::json!({
+            "timestamp": chrono::Utc::now().to_rfc3339(),
+            "iteration": iteration_num,
+            "session_timestamp": session_timestamp,
+            "elapsed_seconds": start_time.elapsed().as_secs(),
+            "status": "running",
+            "pid": std::process::id(),
+            "config_file": autonomous_cli.config_file.to_string_lossy(),
+            "duration_minutes": autonomous_cli.duration,
+            "driver_model": &autonomous_cli.driver_model,
+            "full_auto": autonomous_cli.full_auto
+        });
+        
+        let heartbeat_json = serde_json::to_string_pretty(&heartbeat).unwrap_or_default();
+        
+        // Save heartbeat in session directory
+        let heartbeat_path = session_logs_dir.join("heartbeat.json");
+        if let Err(e) = std::fs::write(&heartbeat_path, &heartbeat_json) {
+            eprintln!("❌ Failed to save heartbeat: {}", e);
+        }
+        
+        // Also save heartbeat to global location for health monitor
+        let global_heartbeat_path = PathBuf::from("./logs/latest_session_heartbeat.json");
+        if let Err(e) = std::fs::write(&global_heartbeat_path, &heartbeat_json) {
+            eprintln!("❌ Failed to save global heartbeat: {}", e);
         }
     };
     
@@ -304,12 +339,45 @@ async fn run_autonomous_mode(
                 &continuation_prompt_template
             };
         
+            // Check context token count and summarize if needed
+            let mut final_context = context.clone();
+            let mut context_was_summarized = false;
+            let context_tokens = count_tokens(&context)?;
+            const MAX_TOKENS: usize = 200_000;
+            const TOKEN_BUFFER: usize = 5_000;
+            
+            if context_tokens > (MAX_TOKENS - TOKEN_BUFFER) {
+                println!("⚠️  Context approaching token limit: {} tokens (max: {})", context_tokens, MAX_TOKENS);
+                
+                // Summarize the formatted context string (but keep conversation_log intact)
+                final_context = summarize_context(
+                    &context,
+                    &autonomous_cli.driver_model,
+                    &summarization_prompt_template,
+                ).await?;
+                
+                context_was_summarized = true;
+                println!("✅ Context summarized from {} to {} tokens", context_tokens, count_tokens(&final_context)?);
+            }
+            
             // Inject config and context into prompt template
             let driver_prompt = inject_template_variables(
                 prompt_template,
                 &config_content,
-                &context,
+                &final_context,
             );
+            
+            // Check final driver prompt token count
+            let driver_prompt_tokens = count_tokens(&driver_prompt)?;
+            println!("📊 Driver prompt tokens: {}", driver_prompt_tokens);
+            
+            if driver_prompt_tokens > (MAX_TOKENS - TOKEN_BUFFER) {
+                return Err(anyhow::anyhow!(
+                    "Driver prompt still too long after summarization: {} tokens (max: {})", 
+                    driver_prompt_tokens, 
+                    MAX_TOKENS - TOKEN_BUFFER
+                ));
+            }
         
             // Generate user prompt using external LLM
             let user_prompt = generate_user_prompt(
@@ -398,7 +466,13 @@ async fn run_autonomous_mode(
                     }
                 }
             }
-            context = readable_context;
+            
+            // Use summarized context if we summarized this iteration, otherwise use rebuilt context
+            if context_was_summarized {
+                context = final_context;
+            } else {
+                context = readable_context;
+            }
             
             // Save checkpoint after each iteration
             save_checkpoint(&conversation_log, iteration as u32);
@@ -413,6 +487,28 @@ async fn run_autonomous_mode(
     
     // Save final checkpoint regardless of how we exit
     save_checkpoint(&conversation_log, iteration as u32);
+    
+    // Update final heartbeat with completion status
+    let final_status = if loop_result.is_ok() { "completed" } else { "error" };
+    let final_heartbeat = serde_json::json!({
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+        "iteration": iteration,
+        "session_timestamp": session_timestamp,
+        "elapsed_seconds": start_time.elapsed().as_secs(),
+        "status": final_status,
+        "pid": std::process::id(),
+        "config_file": autonomous_cli.config_file.to_string_lossy(),
+        "duration_minutes": autonomous_cli.duration,
+        "driver_model": &autonomous_cli.driver_model,
+        "full_auto": autonomous_cli.full_auto
+    });
+    
+    let final_heartbeat_json = serde_json::to_string_pretty(&final_heartbeat).unwrap_or_default();
+    let global_heartbeat_path = PathBuf::from("./logs/latest_session_heartbeat.json");
+    if let Err(e) = std::fs::write(&global_heartbeat_path, &final_heartbeat_json) {
+        eprintln!("❌ Failed to save final heartbeat: {}", e);
+    }
+    
     println!("🏁 Final checkpoint saved for session {}", session_timestamp);
     
     // Return the result
@@ -798,6 +894,29 @@ fn parse_approval_response(response: &str) -> (bool, String) {
         // If the response doesn't clearly start with APPROVE or DENY, auto-deny for safety
         (false, format!("Unclear response format - auto-denied for safety: {}", response))
     }
+}
+
+fn count_tokens(text: &str) -> anyhow::Result<usize> {
+    let bpe = o200k_base().context("Failed to load o200k_base encoding")?;
+    let tokens = bpe.encode_with_special_tokens(text);
+    Ok(tokens.len())
+}
+
+async fn summarize_context(
+    context: &str,
+    model: &str,
+    summarization_prompt_template: &str,
+) -> anyhow::Result<String> {
+    let summarization_prompt = summarization_prompt_template.replace("{context}", context);
+    
+    println!("🔄 Context too long ({} tokens), summarizing...", count_tokens(context).unwrap_or(0));
+    let summary = generate_user_prompt(&summarization_prompt, model).await?;
+    println!("✅ Context summarized from {} to {} tokens", 
+        count_tokens(context).unwrap_or(0), 
+        count_tokens(&summary).unwrap_or(0)
+    );
+    
+    Ok(summary)
 }
 
 async fn generate_user_prompt(
