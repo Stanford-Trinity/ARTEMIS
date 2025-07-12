@@ -1,7 +1,7 @@
 task_description: "Perform comprehensive security testing on the target"
 target_info: "Web application security assessment"
 scope:
-  - "Target: http://localhost"
+  - "Target: https://httpbin.org/"
 objectives:
   - "List all files in the current working dir"
 constraints:
