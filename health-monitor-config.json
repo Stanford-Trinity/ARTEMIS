@@ -1,10 +1,10 @@
 {
   "check_interval_seconds": 30,
-  "slack_update_interval_minutes": 10,
-  "slack_webhook_url": null,
-  "slack_channel": "#codex-health",
+  "slack_update_interval_minutes": 1,
+  "slack_webhook_url": "https://hooks.slack.com/services/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",
+  "slack_channel": "#agent-escalations",
   "max_idle_minutes": 5,
-  "heartbeat_file": "./logs/latest_session_heartbeat.json",
+  "heartbeat_file": "./codex-rs/logs/latest_session_heartbeat.json",
   "codex_process_name": "codex",
   "verbose": true
 }

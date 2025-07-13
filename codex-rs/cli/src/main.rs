@@ -522,6 +522,7 @@ async fn collect_codex_response_with_tools(codex: &codex_core::Codex, submission
     let mut tool_calls = Vec::new();
     let mut tool_responses = Vec::new();
     let mut task_complete = false;
+    let mut denied_tool_calls = std::collections::HashSet::new();
     
     // Collect events until task is complete
     while !task_complete {
@@ -596,6 +597,9 @@ async fn collect_codex_response_with_tools(codex: &codex_core::Codex, submission
                                         } else {
                                             println!("❌ Bugcrowd submission denied by external LLM: {}", reasoning);
                                             
+                                            // Track this call as denied so we ignore its McpToolCallEnd event
+                                            denied_tool_calls.insert(tool.call_id.clone());
+                                            
                                             // Create a fake tool response with the denial reasoning
                                             // This prevents the actual MCP tool from being called
                                             tool_responses.push(serde_json::json!({
@@ -635,6 +639,12 @@ async fn collect_codex_response_with_tools(codex: &codex_core::Codex, submission
                             }));
                         }
                         EventMsg::McpToolCallEnd(result) => {
+                            // Skip results for denied tool calls (we already added the denial response)
+                            if denied_tool_calls.contains(&result.call_id) {
+                                println!("🚫 Ignoring result for denied tool call: {}", result.call_id);
+                                continue;
+                            }
+                            
                             match &result.result {
                                 Ok(success) => {
                                     println!("✅ Tool result: {:?}", success);

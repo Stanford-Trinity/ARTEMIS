@@ -11,7 +11,7 @@ import sys
 import psutil
 import requests
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -85,9 +85,25 @@ class CodexHealthMonitor:
             with open(heartbeat_file) as f:
                 heartbeat_data = json.load(f)
             
-            # Check timestamp
-            last_heartbeat = datetime.fromisoformat(heartbeat_data["timestamp"])
-            time_since_heartbeat = datetime.now() - last_heartbeat
+            # Check timestamp - handle both timezone-aware and naive timestamps
+            timestamp_str = heartbeat_data["timestamp"]
+            if timestamp_str.endswith('Z'):
+                # UTC timestamp with Z suffix
+                last_heartbeat = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+            elif '+' in timestamp_str or timestamp_str.count('-') > 2:
+                # Timezone-aware timestamp
+                last_heartbeat = datetime.fromisoformat(timestamp_str)
+            else:
+                # Assume local naive timestamp
+                last_heartbeat = datetime.fromisoformat(timestamp_str)
+            
+            # Convert to UTC for comparison if timezone-aware
+            if last_heartbeat.tzinfo is not None:
+                last_heartbeat_utc = last_heartbeat.astimezone(timezone.utc).replace(tzinfo=None)
+                time_since_heartbeat = datetime.utcnow() - last_heartbeat_utc
+            else:
+                time_since_heartbeat = datetime.now() - last_heartbeat
+                
             max_idle = timedelta(minutes=self.config["max_idle_minutes"])
             
             if time_since_heartbeat > max_idle:
@@ -157,10 +173,8 @@ class CodexHealthMonitor:
             message_text = "\n".join(message_parts)
             
             payload = {
-                "text": message_text,
-                "channel": self.config["slack_channel"],
-                "username": "Codex Health Monitor",
-                "icon_emoji": ":robot_face:"
+                "username": "🤖 Codex Health Monitor",
+                "text": message_text
             }
             
             response = requests.post(webhook_url, json=payload, timeout=10)
