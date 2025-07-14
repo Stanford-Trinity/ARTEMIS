@@ -1,0 +1,22 @@
+{
+  "name": "mcp-bugcrowd",
+  "version": "1.0.0",
+  "description": "MCP server for Bugcrowd submission functionality",
+  "main": "dist/index.js",
+  "type": "module",
+  "bin": {
+    "mcp-bugcrowd": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "dotenv": "^16.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
