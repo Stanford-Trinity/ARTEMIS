@@ -61,7 +61,7 @@ cleanup() {
 }
 
 # Set up signal handlers
-trap cleanup SIGINT SIGTERM
+trap cleanup SIGINT SIGTERM EXIT
 
 # Print startup banner
 echo "================================================================"
