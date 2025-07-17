@@ -638,6 +638,7 @@ async fn run_autonomous_mode(
                     &approval_prompt_template,
                     &bugcrowd_approval_prompt_template,
                     &session_logs_dir,
+                    &config_content,
                 )
                 .await?;
 
@@ -805,6 +806,7 @@ async fn collect_codex_response_with_tools(
     approval_prompt_template: &str,
     bugcrowd_approval_prompt_template: &str,
     session_logs_dir: &std::path::Path,
+    config_content: &str,
 ) -> anyhow::Result<(
     String,
     Vec<serde_json::Value>,
