@@ -100,6 +100,14 @@ struct AutonomousCommand {
     #[clap(long, value_name = "DIR")]
     resume_dir: Option<PathBuf>,
 
+    /// Start hour for active operation (0-23, Pacific time).
+    #[clap(long, default_value = "0")]
+    work_start_hour: u8,
+
+    /// End hour for active operation (0-23, Pacific time).
+    #[clap(long, default_value = "23")]
+    work_end_hour: u8,
+
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
 }
@@ -171,6 +179,73 @@ async fn run_autonomous_mode(
     use codex_core::protocol::{InputItem, Op};
     use std::time::{Duration, Instant};
     use tokio::time::sleep;
+    use chrono::{DateTime, Utc, Timelike};
+    use chrono_tz::US::Pacific;
+
+    // Helper functions for work hours
+    let is_outside_work_hours = |start_hour: u8, end_hour: u8| -> bool {
+        let now_pacific = Utc::now().with_timezone(&Pacific);
+        let current_hour = now_pacific.hour() as u8;
+        
+        if start_hour <= end_hour {
+            // Normal case: 9-17 (current < start OR current >= end)
+            current_hour < start_hour || current_hour >= end_hour
+        } else {
+            // Overnight case: 22-6 (current >= end AND current < start)
+            current_hour >= end_hour && current_hour < start_hour
+        }
+    };
+
+    let calculate_next_work_time = |start_hour: u8, end_hour: u8| -> DateTime<chrono_tz::Tz> {
+        let now_pacific = Utc::now().with_timezone(&Pacific);
+        let current_hour = now_pacific.hour() as u8;
+        
+        if start_hour <= end_hour {
+            // Normal case: 9-17
+            if current_hour < start_hour {
+                // Same day, wait until start hour
+                now_pacific.date_naive().and_hms_opt(start_hour as u32, 0, 0)
+                    .unwrap().and_local_timezone(Pacific).unwrap()
+            } else {
+                // Next day at start hour
+                (now_pacific.date_naive() + chrono::Duration::days(1))
+                    .and_hms_opt(start_hour as u32, 0, 0)
+                    .unwrap().and_local_timezone(Pacific).unwrap()
+            }
+        } else {
+            // Overnight case: 22-6
+            if current_hour >= start_hour {
+                // Continue tonight until end hour (next day)
+                (now_pacific.date_naive() + chrono::Duration::days(1))
+                    .and_hms_opt(end_hour as u32, 0, 0)
+                    .unwrap().and_local_timezone(Pacific).unwrap()
+            } else if current_hour < end_hour {
+                // Already in work hours (after midnight)
+                now_pacific
+            } else {
+                // Wait until start hour today
+                now_pacific.date_naive().and_hms_opt(start_hour as u32, 0, 0)
+                    .unwrap().and_local_timezone(Pacific).unwrap()
+            }
+        }
+    };
+
+    let sleep_until_work_hours = |target_time: DateTime<chrono_tz::Tz>| async move {
+        loop {
+            let now_pacific = Utc::now().with_timezone(&Pacific);
+            if now_pacific >= target_time {
+                break;
+            }
+            
+            let sleep_duration = std::cmp::min(
+                (target_time - now_pacific).num_seconds(),
+                300 // Max 5 minutes between checks
+            ) as u64;
+            
+            println!("😴 Sleeping for {} seconds until work hours resume...", sleep_duration);
+            tokio::time::sleep(Duration::from_secs(sleep_duration)).await;
+        }
+    };
 
     println!("🚀 Starting autonomous mode...");
     println!("📁 Config file: {:?}", autonomous_cli.config_file);
@@ -560,14 +635,19 @@ async fn run_autonomous_mode(
                 conversation_log.push(serde_json::json!({
                     "role": "user",
                     "content": user_prompt,
-                    "tool_calls": tool_results.iter().map(|tr| serde_json::json!({
-                        "id": tr["tool_call_id"],
-                        "type": "function",
-                        "function": {
-                            "name": if tr["tool_call_id"].as_str().unwrap_or("").starts_with("write_note") { "write_note" } else { "read_notes" },
-                            "arguments": serde_json::json!({})
-                        }
-                    })).collect::<Vec<_>>()
+                    "tool_calls": tool_results.iter().map(|tr| {
+                        // Find the original tool call to get the correct tool name
+                        let tool_call_id = tr["tool_call_id"].as_str().unwrap_or("");
+                        let tool_name = tr.get("tool_name").and_then(|n| n.as_str()).unwrap_or("unknown");
+                        serde_json::json!({
+                            "id": tool_call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tool_name,
+                                "arguments": serde_json::json!({})
+                            }
+                        })
+                    }).collect::<Vec<_>>()
                 }));
 
                 // Add tool results to conversation log
@@ -748,6 +828,43 @@ async fn run_autonomous_mode(
 
             // Save checkpoint after each iteration
             save_checkpoint(&conversation_log, iteration as u32);
+
+            // Check if we should pause for work hours
+            if is_outside_work_hours(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour) {
+                let next_work_time = calculate_next_work_time(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour);
+                println!("⏸️  Outside work hours ({}:00-{}:00 Pacific). Pausing until {}", 
+                    autonomous_cli.work_start_hour, autonomous_cli.work_end_hour, 
+                    next_work_time.format("%Y-%m-%d %H:%M %Z"));
+                
+                // Update heartbeat to show paused status
+                let paused_heartbeat = serde_json::json!({
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "iteration": iteration,
+                    "session_timestamp": session_timestamp,
+                    "elapsed_seconds": start_time.elapsed().as_secs(),
+                    "status": "paused",
+                    "resume_time": next_work_time.to_rfc3339(),
+                    "pid": std::process::id(),
+                    "config_file": autonomous_cli.config_file.to_string_lossy(),
+                    "duration_minutes": autonomous_cli.duration,
+                    "driver_model": &autonomous_cli.driver_model,
+                    "full_auto": autonomous_cli.full_auto
+                });
+                
+                let paused_heartbeat_json = serde_json::to_string_pretty(&paused_heartbeat).unwrap_or_default();
+                let global_heartbeat_path = PathBuf::from("./logs/latest_session_heartbeat.json");
+                let backup_heartbeat_path = dirs::home_dir()
+                    .unwrap_or_default()
+                    .join("codex-logs-backup")
+                    .join("latest_session_heartbeat.json");
+                
+                let _ = std::fs::write(&global_heartbeat_path, &paused_heartbeat_json);
+                let _ = std::fs::write(&backup_heartbeat_path, &paused_heartbeat_json);
+                
+                sleep_until_work_hours(next_work_time).await;
+                
+                println!("▶️  Work hours resumed. Continuing autonomous mode...");
+            }
 
             // Wait before next iteration
             sleep(Duration::from_secs(10)).await;
@@ -1631,6 +1748,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
         let arguments = &tool_call["function"]["arguments"];
         
         println!("🔧 Processing tool call: id={}, name={}", tool_id, tool_name);
+        println!("🔧 Debug tool_call structure: {}", serde_json::to_string_pretty(&tool_call).unwrap_or("invalid".to_string()));
         match tool_name {
             "write_note" => {
                 let content = arguments["content"].as_str().unwrap_or("");
@@ -1645,6 +1763,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                     Ok(_) => {
                         tool_results.push(serde_json::json!({
                             "tool_call_id": tool_id,
+                            "tool_name": tool_name,
                             "content": format!("Note written successfully to {}", filename)
                         }));
                         println!("📝 Supervisor wrote note: {}", filename);
@@ -1652,6 +1771,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                     Err(e) => {
                         tool_results.push(serde_json::json!({
                             "tool_call_id": tool_id,
+                            "tool_name": tool_name,
                             "content": format!("Error writing note: {}", e)
                         }));
                     }
@@ -1702,6 +1822,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                 
                 tool_results.push(serde_json::json!({
                     "tool_call_id": tool_id,
+                    "tool_name": tool_name,
                     "content": all_notes
                 }));
                 println!("📖 Supervisor read notes");
@@ -1709,6 +1830,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
             _ => {
                 tool_results.push(serde_json::json!({
                     "tool_call_id": tool_id,
+                    "tool_name": tool_name,
                     "content": format!("Unknown tool: {}", tool_name)
                 }));
             }
