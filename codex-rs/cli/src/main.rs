@@ -1,9 +1,9 @@
 use anyhow::Context;
 use clap::Parser;
-use codex_cli::LandlockCommand;
-use codex_cli::SeatbeltCommand;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::proto;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
@@ -174,19 +174,19 @@ async fn run_autonomous_mode(
     autonomous_cli: AutonomousCommand,
     _codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
+    use chrono::{DateTime, Timelike, Utc};
+    use chrono_tz::US::Pacific;
     use codex_core::codex_wrapper::init_codex;
     use codex_core::config::Config;
     use codex_core::protocol::{InputItem, Op};
     use std::time::{Duration, Instant};
     use tokio::time::sleep;
-    use chrono::{DateTime, Utc, Timelike};
-    use chrono_tz::US::Pacific;
 
     // Helper functions for work hours
     let is_outside_work_hours = |start_hour: u8, end_hour: u8| -> bool {
         let now_pacific = Utc::now().with_timezone(&Pacific);
         let current_hour = now_pacific.hour() as u8;
-        
+
         if start_hour <= end_hour {
             // Normal case: 9-17 (current < start OR current >= end)
             current_hour < start_hour || current_hour >= end_hour
@@ -199,18 +199,24 @@ async fn run_autonomous_mode(
     let calculate_next_work_time = |start_hour: u8, end_hour: u8| -> DateTime<chrono_tz::Tz> {
         let now_pacific = Utc::now().with_timezone(&Pacific);
         let current_hour = now_pacific.hour() as u8;
-        
+
         if start_hour <= end_hour {
             // Normal case: 9-17
             if current_hour < start_hour {
                 // Same day, wait until start hour
-                now_pacific.date_naive().and_hms_opt(start_hour as u32, 0, 0)
-                    .unwrap().and_local_timezone(Pacific).unwrap()
+                now_pacific
+                    .date_naive()
+                    .and_hms_opt(start_hour as u32, 0, 0)
+                    .unwrap()
+                    .and_local_timezone(Pacific)
+                    .unwrap()
             } else {
                 // Next day at start hour
                 (now_pacific.date_naive() + chrono::Duration::days(1))
                     .and_hms_opt(start_hour as u32, 0, 0)
-                    .unwrap().and_local_timezone(Pacific).unwrap()
+                    .unwrap()
+                    .and_local_timezone(Pacific)
+                    .unwrap()
             }
         } else {
             // Overnight case: 22-6
@@ -218,14 +224,20 @@ async fn run_autonomous_mode(
                 // Continue tonight until end hour (next day)
                 (now_pacific.date_naive() + chrono::Duration::days(1))
                     .and_hms_opt(end_hour as u32, 0, 0)
-                    .unwrap().and_local_timezone(Pacific).unwrap()
+                    .unwrap()
+                    .and_local_timezone(Pacific)
+                    .unwrap()
             } else if current_hour < end_hour {
                 // Already in work hours (after midnight)
                 now_pacific
             } else {
                 // Wait until start hour today
-                now_pacific.date_naive().and_hms_opt(start_hour as u32, 0, 0)
-                    .unwrap().and_local_timezone(Pacific).unwrap()
+                now_pacific
+                    .date_naive()
+                    .and_hms_opt(start_hour as u32, 0, 0)
+                    .unwrap()
+                    .and_local_timezone(Pacific)
+                    .unwrap()
             }
         }
     };
@@ -236,13 +248,16 @@ async fn run_autonomous_mode(
             if now_pacific >= target_time {
                 break;
             }
-            
+
             let sleep_duration = std::cmp::min(
                 (target_time - now_pacific).num_seconds(),
-                300 // Max 5 minutes between checks
+                300, // Max 5 minutes between checks
             ) as u64;
-            
-            println!("😴 Sleeping for {} seconds until work hours resume...", sleep_duration);
+
+            println!(
+                "😴 Sleeping for {} seconds until work hours resume...",
+                sleep_duration
+            );
             tokio::time::sleep(Duration::from_secs(sleep_duration)).await;
         }
     };
@@ -351,7 +366,7 @@ async fn run_autonomous_mode(
     // Load resume context if resume directory is provided
     if let Some(ref resume_dir) = autonomous_cli.resume_dir {
         println!("🔄 Loading resume context from {:?}", resume_dir);
-        
+
         // Load context from context_log.txt
         let context_log_file = resume_dir.join("context_log.txt");
         if context_log_file.exists() {
@@ -359,7 +374,7 @@ async fn run_autonomous_mode(
                 .with_context(|| format!("Failed to read context log: {:?}", context_log_file))?;
             println!("✅ Context log loaded ({} bytes)", context.len());
         }
-        
+
         // Load conversation from latest.json
         let latest_file = resume_dir.join("latest.json");
         if latest_file.exists() {
@@ -367,9 +382,12 @@ async fn run_autonomous_mode(
                 .with_context(|| format!("Failed to read latest.json: {:?}", latest_file))?;
             conversation_log = serde_json::from_str(&latest_content)
                 .with_context(|| format!("Failed to parse latest.json: {:?}", latest_file))?;
-            println!("✅ Conversation log loaded ({} messages)", conversation_log.len());
+            println!(
+                "✅ Conversation log loaded ({} messages)",
+                conversation_log.len()
+            );
         }
-        
+
         // Determine next iteration number from existing files
         let mut max_iteration = 0;
         if let Ok(entries) = std::fs::read_dir(resume_dir) {
@@ -395,7 +413,7 @@ async fn run_autonomous_mode(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    
+
     let session_logs_dir = if let Some(ref resume_dir) = autonomous_cli.resume_dir {
         // Use existing directory for resume
         resume_dir.clone()
@@ -450,8 +468,9 @@ async fn run_autonomous_mode(
 
         // Save numbered checkpoint to both locations
         let checkpoint_path = session_logs_dir.join(format!("iteration_{:03}.json", iteration_num));
-        let backup_checkpoint_path = backup_logs_dir.join(format!("iteration_{:03}.json", iteration_num));
-        
+        let backup_checkpoint_path =
+            backup_logs_dir.join(format!("iteration_{:03}.json", iteration_num));
+
         if let Err(e) = std::fs::write(&checkpoint_path, &log_json) {
             eprintln!("❌ Failed to save checkpoint {}: {}", iteration_num, e);
         } else {
@@ -460,21 +479,27 @@ async fn run_autonomous_mode(
                 iteration_num, checkpoint_path
             );
         }
-        
+
         if let Err(e) = std::fs::write(&backup_checkpoint_path, &log_json) {
-            eprintln!("❌ Failed to save backup checkpoint {}: {}", iteration_num, e);
+            eprintln!(
+                "❌ Failed to save backup checkpoint {}: {}",
+                iteration_num, e
+            );
         } else {
-            println!("📝 Backup checkpoint {} saved to: {:?}", iteration_num, backup_checkpoint_path);
+            println!(
+                "📝 Backup checkpoint {} saved to: {:?}",
+                iteration_num, backup_checkpoint_path
+            );
         }
 
         // Also save as latest.json for easy access to both locations
         let latest_path = session_logs_dir.join("latest.json");
         let backup_latest_path = backup_logs_dir.join("latest.json");
-        
+
         if let Err(e) = std::fs::write(&latest_path, &log_json) {
             eprintln!("❌ Failed to save latest.json: {}", e);
         }
-        
+
         if let Err(e) = std::fs::write(&backup_latest_path, &log_json) {
             eprintln!("❌ Failed to save backup latest.json: {}", e);
         }
@@ -493,14 +518,14 @@ async fn run_autonomous_mode(
         });
         let metadata_path = session_logs_dir.join("session_info.json");
         let backup_metadata_path = backup_logs_dir.join("session_info.json");
-        
+
         if let Err(e) = std::fs::write(
             &metadata_path,
             serde_json::to_string_pretty(&metadata).unwrap_or_default(),
         ) {
             eprintln!("❌ Failed to save session metadata: {}", e);
         }
-        
+
         if let Err(e) = std::fs::write(
             &backup_metadata_path,
             serde_json::to_string_pretty(&metadata).unwrap_or_default(),
@@ -527,11 +552,11 @@ async fn run_autonomous_mode(
         // Save heartbeat in session directory and backup
         let heartbeat_path = session_logs_dir.join("heartbeat.json");
         let backup_heartbeat_path = backup_logs_dir.join("heartbeat.json");
-        
+
         if let Err(e) = std::fs::write(&heartbeat_path, &heartbeat_json) {
             eprintln!("❌ Failed to save heartbeat: {}", e);
         }
-        
+
         if let Err(e) = std::fs::write(&backup_heartbeat_path, &heartbeat_json) {
             eprintln!("❌ Failed to save backup heartbeat: {}", e);
         }
@@ -542,11 +567,11 @@ async fn run_autonomous_mode(
             .unwrap_or_else(|| PathBuf::from("."))
             .join("codex-logs-backup")
             .join("latest_session_heartbeat.json");
-            
+
         if let Err(e) = std::fs::write(&global_heartbeat_path, &heartbeat_json) {
             eprintln!("❌ Failed to save global heartbeat: {}", e);
         }
-        
+
         if let Err(e) = std::fs::write(&backup_global_heartbeat_path, &heartbeat_json) {
             eprintln!("❌ Failed to save backup global heartbeat: {}", e);
         }
@@ -1004,8 +1029,12 @@ async fn collect_codex_response_with_tools(
                                     &tool.arguments,
                                 );
 
-                                match generate_user_prompt(&tool_approval_prompt, driver_model, &session_logs_dir)
-                                    .await
+                                match generate_user_prompt(
+                                    &tool_approval_prompt,
+                                    driver_model,
+                                    &session_logs_dir,
+                                )
+                                .await
                                 {
                                     Ok((response, _)) => {
                                         println!("🤖 External LLM response: {}", response);
@@ -1147,26 +1176,28 @@ async fn collect_codex_response_with_tools(
                                 context_info
                             );
 
-                            let decision =
-                                match generate_user_prompt(&approval_prompt, driver_model, &session_logs_dir).await {
-                                    Ok((response, _)) => {
-                                        println!("🤖 External LLM response: {}", response);
-                                        if response.to_lowercase().contains("approve") {
-                                            println!("✅ Approved by external LLM");
-                                            codex_core::protocol::ReviewDecision::Approved
-                                        } else {
-                                            println!("❌ Denied by external LLM");
-                                            codex_core::protocol::ReviewDecision::Denied
-                                        }
-                                    }
-                                    Err(e) => {
-                                        println!(
-                                            "❌ Error getting approval from external LLM: {}",
-                                            e
-                                        );
+                            let decision = match generate_user_prompt(
+                                &approval_prompt,
+                                driver_model,
+                                &session_logs_dir,
+                            )
+                            .await
+                            {
+                                Ok((response, _)) => {
+                                    println!("🤖 External LLM response: {}", response);
+                                    if response.to_lowercase().contains("approve") {
+                                        println!("✅ Approved by external LLM");
+                                        codex_core::protocol::ReviewDecision::Approved
+                                    } else {
+                                        println!("❌ Denied by external LLM");
                                         codex_core::protocol::ReviewDecision::Denied
                                     }
-                                };
+                                }
+                                Err(e) => {
+                                    println!("❌ Error getting approval from external LLM: {}", e);
+                                    codex_core::protocol::ReviewDecision::Denied
+                                }
+                            };
 
                             // Add approval decision as a tool response
                             tool_responses.push(serde_json::json!({
@@ -1196,7 +1227,10 @@ async fn collect_codex_response_with_tools(
                             }
                         }
                         EventMsg::ApplyPatchApprovalRequest(patch_approval) => {
-                            println!("🔍 Patch approval requested for {} files", patch_approval.changes.len());
+                            println!(
+                                "🔍 Patch approval requested for {} files",
+                                patch_approval.changes.len()
+                            );
 
                             // Add patch approval request as a tool call
                             let approval_id = format!(
@@ -1216,35 +1250,41 @@ async fn collect_codex_response_with_tools(
                             }));
 
                             // Generate patch approval prompt with task context
-                            let patch_approval_prompt = inject_patch_approval_variables_with_context(
-                                approval_prompt_template,
-                                &patch_approval.changes,
-                                &patch_approval.reason,
-                                &config_content,
-                            );
+                            let patch_approval_prompt =
+                                inject_patch_approval_variables_with_context(
+                                    approval_prompt_template,
+                                    &patch_approval.changes,
+                                    &patch_approval.reason,
+                                    &config_content,
+                                );
 
                             println!("🤖 Requesting patch approval from external LLM...");
 
-                            let decision =
-                                match generate_user_prompt(&patch_approval_prompt, driver_model, &session_logs_dir).await {
-                                    Ok((response, _)) => {
-                                        println!("🤖 External LLM response: {}", response);
-                                        if response.to_lowercase().contains("approve") {
-                                            println!("✅ Patch approved by external LLM");
-                                            codex_core::protocol::ReviewDecision::Approved
-                                        } else {
-                                            println!("❌ Patch denied by external LLM");
-                                            codex_core::protocol::ReviewDecision::Denied
-                                        }
-                                    }
-                                    Err(e) => {
-                                        println!(
-                                            "❌ Error getting patch approval from external LLM: {}",
-                                            e
-                                        );
+                            let decision = match generate_user_prompt(
+                                &patch_approval_prompt,
+                                driver_model,
+                                &session_logs_dir,
+                            )
+                            .await
+                            {
+                                Ok((response, _)) => {
+                                    println!("🤖 External LLM response: {}", response);
+                                    if response.to_lowercase().contains("approve") {
+                                        println!("✅ Patch approved by external LLM");
+                                        codex_core::protocol::ReviewDecision::Approved
+                                    } else {
+                                        println!("❌ Patch denied by external LLM");
                                         codex_core::protocol::ReviewDecision::Denied
                                     }
-                                };
+                                }
+                                Err(e) => {
+                                    println!(
+                                        "❌ Error getting patch approval from external LLM: {}",
+                                        e
+                                    );
+                                    codex_core::protocol::ReviewDecision::Denied
+                                }
+                            };
 
                             // Add patch approval decision as a tool response
                             tool_responses.push(serde_json::json!({
@@ -1417,7 +1457,10 @@ fn inject_patch_approval_variables_with_context(
     let reason_str = reason.as_deref().unwrap_or("No reason provided");
 
     template
-        .replace("{command}", &format!("Apply patch to {} files", changes.len()))
+        .replace(
+            "{command}",
+            &format!("Apply patch to {} files", changes.len()),
+        )
         .replace("{cwd}", ".")
         .replace("{reason}", reason_str)
         .replace("{task_context}", config_content)
@@ -1498,7 +1541,12 @@ async fn summarize_context(
         "🔄 Context too long ({} tokens), summarizing...",
         count_tokens(context).unwrap_or(0)
     );
-    let (summary, _) = generate_user_prompt(&summarization_prompt, model, &std::path::Path::new("./logs")).await?;
+    let (summary, _) = generate_user_prompt(
+        &summarization_prompt,
+        model,
+        &std::path::Path::new("./logs"),
+    )
+    .await?;
     println!(
         "✅ Context summarized from {} to {} tokens",
         count_tokens(context).unwrap_or(0),
@@ -1508,12 +1556,16 @@ async fn summarize_context(
     Ok(summary)
 }
 
-async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir: &std::path::Path) -> anyhow::Result<(String, Vec<serde_json::Value>)> {
+async fn generate_user_prompt(
+    driver_prompt: &str,
+    model: &str,
+    session_logs_dir: &std::path::Path,
+) -> anyhow::Result<(String, Vec<serde_json::Value>)> {
     use codex_core::client::ModelClient;
     use codex_core::client_common::Prompt;
     use codex_core::config_types::{ReasoningEffort, ReasoningSummary};
     use codex_core::model_provider_info::{ModelProviderInfo, WireApi};
-    use codex_core::models::{ContentItem, ResponseItem, FunctionCallOutputPayload};
+    use codex_core::models::{ContentItem, FunctionCallOutputPayload, ResponseItem};
     use futures::StreamExt;
     use std::collections::HashMap;
 
@@ -1549,7 +1601,7 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir
 
     // Create note-taking tools
     let mut extra_tools = std::collections::HashMap::new();
-    
+
     // Tool to write a note
     extra_tools.insert("write_note".to_string(), mcp_types::Tool {
         name: "write_note".to_string(),
@@ -1566,18 +1618,58 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir
             required: Some(vec!["content".to_string()]),
         },
     });
-    
+
     // Tool to read notes
-    extra_tools.insert("read_notes".to_string(), mcp_types::Tool {
-        name: "read_notes".to_string(),
-        description: Some("Read all existing notes to recall previous observations and decisions".to_string()),
-        annotations: None,
-        input_schema: mcp_types::ToolInputSchema {
-            r#type: "object".to_string(),
-            properties: Some(serde_json::json!({})),
-            required: Some(vec![]),
+    extra_tools.insert(
+        "read_notes".to_string(),
+        mcp_types::Tool {
+            name: "read_notes".to_string(),
+            description: Some(
+                "Read all existing notes to recall previous observations and decisions".to_string(),
+            ),
+            annotations: None,
+            input_schema: mcp_types::ToolInputSchema {
+                r#type: "object".to_string(),
+                properties: Some(serde_json::json!({})),
+                required: Some(vec![]),
+            },
         },
-    });
+    );
+
+    // Tool to submit vulnerability report to Slack via webhook
+    extra_tools.insert(
+        "slack_webhook".to_string(),
+        mcp_types::Tool {
+            name: "slack_webhook".to_string(),
+            description: Some(
+                "Submit a vulnerability report to Slack via configured webhook".to_string(),
+            ),
+            annotations: None,
+            input_schema: mcp_types::ToolInputSchema {
+                r#type: "object".to_string(),
+                properties: Some(serde_json::json!({
+                    "title": { "type": "string", "description": "Vulnerability title" },
+                    "asset": { "type": "string", "description": "Affected asset" },
+                    "vuln_type": { "type": "string", "description": "Type of vulnerability" },
+                    "severity": { "type": "string", "description": "Severity rating" },
+                    "description": { "type": "string", "description": "Detailed description" },
+                    "repro_steps": { "type": "string", "description": "Reproduction steps" },
+                    "impact": { "type": "string", "description": "Impact summary" },
+                    "cleanup": { "type": "string", "description": "Cleanup instructions" }
+                })),
+                required: Some(vec![
+                    "title".to_string(),
+                    "asset".to_string(),
+                    "vuln_type".to_string(),
+                    "severity".to_string(),
+                    "description".to_string(),
+                    "repro_steps".to_string(),
+                    "impact".to_string(),
+                    "cleanup".to_string(),
+                ]),
+            },
+        },
+    );
 
     let prompt = Prompt {
         input: vec![user_message.clone()],
@@ -1601,31 +1693,33 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir
         match event {
             Ok(response_event) => {
                 match response_event {
-                    codex_core::client_common::ResponseEvent::OutputItemDone(item) => {
-                        match item {
-                            ResponseItem::Message { content, .. } => {
-                                for content_item in content {
-                                    match content_item {
-                                        ContentItem::OutputText { text } => {
-                                            response_text.push_str(&text);
-                                        }
-                                        _ => {}
+                    codex_core::client_common::ResponseEvent::OutputItemDone(item) => match item {
+                        ResponseItem::Message { content, .. } => {
+                            for content_item in content {
+                                match content_item {
+                                    ContentItem::OutputText { text } => {
+                                        response_text.push_str(&text);
                                     }
+                                    _ => {}
                                 }
                             }
-                            ResponseItem::FunctionCall { name, arguments, call_id } => {
-                                tool_calls.push(serde_json::json!({
-                                    "id": call_id,
-                                    "type": "function",
-                                    "function": {
-                                        "name": name,
-                                        "arguments": arguments
-                                    }
-                                }));
-                            }
-                            _ => {}
                         }
-                    }
+                        ResponseItem::FunctionCall {
+                            name,
+                            arguments,
+                            call_id,
+                        } => {
+                            tool_calls.push(serde_json::json!({
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "arguments": arguments
+                                }
+                            }));
+                        }
+                        _ => {}
+                    },
                     codex_core::client_common::ResponseEvent::Completed { .. } => {
                         break;
                     }
@@ -1643,40 +1737,49 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir
     // Handle tool calls
     if !tool_calls.is_empty() {
         let tool_results = handle_supervisor_tool_calls(&tool_calls, session_logs_dir).await?;
-        
+
         // Add tool calls and results to conversation and get new instruction
         let mut conversation = vec![user_message];
-        
+
         // Add the assistant's response with tool calls
         conversation.push(ResponseItem::Message {
             role: "assistant".to_string(),
             content: if response_text.trim().is_empty() {
                 vec![]
             } else {
-                vec![ContentItem::OutputText { text: response_text.trim().to_string() }]
+                vec![ContentItem::OutputText {
+                    text: response_text.trim().to_string(),
+                }]
             },
         });
-        
+
         // Add function calls
         for tool_call in &tool_calls {
             conversation.push(ResponseItem::FunctionCall {
-                name: tool_call["function"]["name"].as_str().unwrap_or("unknown").to_string(),
-                arguments: serde_json::to_string(&tool_call["function"]["arguments"]).unwrap_or("{}".to_string()),
+                name: tool_call["function"]["name"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string(),
+                arguments: serde_json::to_string(&tool_call["function"]["arguments"])
+                    .unwrap_or("{}".to_string()),
                 call_id: tool_call["id"].as_str().unwrap_or("unknown").to_string(),
             });
         }
-        
+
         // Add tool results
         for tool_result in &tool_results {
             conversation.push(ResponseItem::FunctionCallOutput {
-                call_id: tool_result["tool_call_id"].as_str().unwrap_or("unknown").to_string(),
+                call_id: tool_result["tool_call_id"]
+                    .as_str()
+                    .unwrap_or("unknown")
+                    .to_string(),
                 output: FunctionCallOutputPayload {
                     content: tool_result["content"].as_str().unwrap_or("").to_string(),
                     success: Some(true),
                 },
             });
         }
-        
+
         // Make another call to get the follow-up instruction
         let follow_up_prompt = Prompt {
             input: conversation,
@@ -1685,46 +1788,42 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir
             store: false,
             extra_tools: HashMap::new(), // No tools for follow-up
         };
-        
+
         let mut follow_up_stream = client
             .stream(&follow_up_prompt)
             .await
             .with_context(|| "Failed to create follow-up response stream")?;
-        
+
         let mut follow_up_text = String::new();
-        
+
         // Collect follow-up response
         while let Some(event) = follow_up_stream.next().await {
             match event {
-                Ok(response_event) => {
-                    match response_event {
-                        codex_core::client_common::ResponseEvent::OutputItemDone(item) => {
-                            match item {
-                                ResponseItem::Message { content, .. } => {
-                                    for content_item in content {
-                                        match content_item {
-                                            ContentItem::OutputText { text } => {
-                                                follow_up_text.push_str(&text);
-                                            }
-                                            _ => {}
-                                        }
+                Ok(response_event) => match response_event {
+                    codex_core::client_common::ResponseEvent::OutputItemDone(item) => match item {
+                        ResponseItem::Message { content, .. } => {
+                            for content_item in content {
+                                match content_item {
+                                    ContentItem::OutputText { text } => {
+                                        follow_up_text.push_str(&text);
                                     }
+                                    _ => {}
                                 }
-                                _ => {}
                             }
                         }
-                        codex_core::client_common::ResponseEvent::Completed { .. } => {
-                            break;
-                        }
                         _ => {}
+                    },
+                    codex_core::client_common::ResponseEvent::Completed { .. } => {
+                        break;
                     }
-                }
+                    _ => {}
+                },
                 Err(e) => {
                     return Err(anyhow::anyhow!("Error in follow-up response stream: {}", e));
                 }
             }
         }
-        
+
         return Ok((follow_up_text.trim().to_string(), tool_results));
     }
 
@@ -1735,30 +1834,39 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir
     Ok((response_text.trim().to_string(), Vec::new()))
 }
 
-async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_logs_dir: &std::path::Path) -> anyhow::Result<Vec<serde_json::Value>> {
+async fn handle_supervisor_tool_calls(
+    tool_calls: &[serde_json::Value],
+    session_logs_dir: &std::path::Path,
+) -> anyhow::Result<Vec<serde_json::Value>> {
     let mut tool_results = Vec::new();
     let notes_dir = session_logs_dir.join("notes");
-    
+
     // Ensure notes directory exists
     std::fs::create_dir_all(&notes_dir).with_context(|| "Failed to create notes directory")?;
-    
+
     for tool_call in tool_calls {
         let tool_id = tool_call["id"].as_str().unwrap_or("unknown");
         let tool_name = tool_call["function"]["name"].as_str().unwrap_or("unknown");
         let arguments = &tool_call["function"]["arguments"];
-        
-        println!("🔧 Processing tool call: id={}, name={}", tool_id, tool_name);
-        println!("🔧 Debug tool_call structure: {}", serde_json::to_string_pretty(&tool_call).unwrap_or("invalid".to_string()));
+
+        println!(
+            "🔧 Processing tool call: id={}, name={}",
+            tool_id, tool_name
+        );
+        println!(
+            "🔧 Debug tool_call structure: {}",
+            serde_json::to_string_pretty(&tool_call).unwrap_or("invalid".to_string())
+        );
         match tool_name {
             "write_note" => {
                 let content = arguments["content"].as_str().unwrap_or("");
                 let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
                 let note_content = format!("[{}] {}\n", timestamp, content);
-                
+
                 // Generate a timestamped filename
                 let filename = format!("note_{}.txt", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
                 let note_path = notes_dir.join(&filename);
-                
+
                 match std::fs::write(&note_path, &note_content) {
                     Ok(_) => {
                         tool_results.push(serde_json::json!({
@@ -1779,7 +1887,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
             }
             "read_notes" => {
                 let mut all_notes = String::new();
-                
+
                 match std::fs::read_dir(&notes_dir) {
                     Ok(entries) => {
                         let mut note_files: Vec<_> = entries
@@ -1793,10 +1901,10 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                                 }
                             })
                             .collect();
-                        
+
                         // Sort by filename (which includes timestamp)
                         note_files.sort();
-                        
+
                         if note_files.is_empty() {
                             all_notes = "No notes yet.".to_string();
                         } else {
@@ -1809,7 +1917,11 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                                         }
                                     }
                                     Err(e) => {
-                                        all_notes.push_str(&format!("Error reading {}: {}\n", note_path.display(), e));
+                                        all_notes.push_str(&format!(
+                                            "Error reading {}: {}\n",
+                                            note_path.display(),
+                                            e
+                                        ));
                                     }
                                 }
                             }
@@ -1819,7 +1931,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                         all_notes = "No notes yet.".to_string();
                     }
                 }
-                
+
                 tool_results.push(serde_json::json!({
                     "tool_call_id": tool_id,
                     "tool_name": tool_name,
@@ -1851,7 +1963,15 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                 let payload_str = payload.to_string();
                 let webhook_url = "https://hooks.slack.com/triggers/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";
                 match std::process::Command::new("curl")
-                    .args(&["-X", "POST", "-H", "Content-Type: application/json", "--data", &payload_str, webhook_url])
+                    .args(&[
+                        "-X",
+                        "POST",
+                        "-H",
+                        "Content-Type: application/json",
+                        "--data",
+                        &payload_str,
+                        webhook_url,
+                    ])
                     .output()
                 {
                     Ok(output) => {
@@ -1886,7 +2006,7 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
             }
         }
     }
-    
+
     Ok(tool_results)
 }
 
