@@ -30,7 +30,7 @@ class CodexHealthMonitor:
             "slack_webhook_url": None,
             "slack_channel": "#codex-health",
             "max_idle_minutes": 5,
-            "heartbeat_file": "./codex-rs/logs/heartbeat.json",
+            "heartbeat_file": "./codex-rs/logs/latest-session-heartbeat.json",
             "codex_process_name": "codex",
             "verbose": True
         }
