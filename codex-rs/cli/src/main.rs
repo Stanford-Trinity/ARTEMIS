@@ -249,7 +249,10 @@ async fn run_autonomous_mode(
     if autonomous_cli.full_auto {
         config_overrides.approval_policy = Some(codex_core::protocol::AskForApproval::OnFailure);
         config_overrides.sandbox_policy =
-            Some(codex_core::protocol::SandboxPolicy::new_workspace_write_policy());
+            Some(codex_core::protocol::SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![],
+                network_access: true,
+            });
     }
 
     let config = Config::load_with_cli_overrides(
@@ -336,6 +339,19 @@ async fn run_autonomous_mode(
 
     println!("📁 Session logs directory: {:?}", session_logs_dir);
 
+    // Create backup directory in home directory
+    let backup_logs_dir = dirs::home_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not find home directory"))?
+        .join("codex-logs-backup")
+        .join(format!("autonomous_session_{}", session_timestamp));
+    std::fs::create_dir_all(&backup_logs_dir).with_context(|| {
+        format!(
+            "Failed to create backup logs directory: {:?}",
+            backup_logs_dir
+        )
+    })?;
+    println!("📁 Backup logs directory: {:?}", backup_logs_dir);
+
     // Load codex system prompt from prompt.md (only for new sessions)
     if autonomous_cli.resume_dir.is_none() {
         let prompt_md_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -357,8 +373,10 @@ async fn run_autonomous_mode(
     let save_checkpoint = |log: &Vec<serde_json::Value>, iteration_num: u32| {
         let log_json = serde_json::to_string_pretty(log).unwrap_or_else(|_| "[]".to_string());
 
-        // Save numbered checkpoint
+        // Save numbered checkpoint to both locations
         let checkpoint_path = session_logs_dir.join(format!("iteration_{:03}.json", iteration_num));
+        let backup_checkpoint_path = backup_logs_dir.join(format!("iteration_{:03}.json", iteration_num));
+        
         if let Err(e) = std::fs::write(&checkpoint_path, &log_json) {
             eprintln!("❌ Failed to save checkpoint {}: {}", iteration_num, e);
         } else {
@@ -367,14 +385,26 @@ async fn run_autonomous_mode(
                 iteration_num, checkpoint_path
             );
         }
+        
+        if let Err(e) = std::fs::write(&backup_checkpoint_path, &log_json) {
+            eprintln!("❌ Failed to save backup checkpoint {}: {}", iteration_num, e);
+        } else {
+            println!("📝 Backup checkpoint {} saved to: {:?}", iteration_num, backup_checkpoint_path);
+        }
 
-        // Also save as latest.json for easy access
+        // Also save as latest.json for easy access to both locations
         let latest_path = session_logs_dir.join("latest.json");
+        let backup_latest_path = backup_logs_dir.join("latest.json");
+        
         if let Err(e) = std::fs::write(&latest_path, &log_json) {
             eprintln!("❌ Failed to save latest.json: {}", e);
         }
+        
+        if let Err(e) = std::fs::write(&backup_latest_path, &log_json) {
+            eprintln!("❌ Failed to save backup latest.json: {}", e);
+        }
 
-        // Save session metadata
+        // Save session metadata to both locations
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -387,11 +417,20 @@ async fn run_autonomous_mode(
             "last_updated": current_time
         });
         let metadata_path = session_logs_dir.join("session_info.json");
+        let backup_metadata_path = backup_logs_dir.join("session_info.json");
+        
         if let Err(e) = std::fs::write(
             &metadata_path,
             serde_json::to_string_pretty(&metadata).unwrap_or_default(),
         ) {
             eprintln!("❌ Failed to save session metadata: {}", e);
+        }
+        
+        if let Err(e) = std::fs::write(
+            &backup_metadata_path,
+            serde_json::to_string_pretty(&metadata).unwrap_or_default(),
+        ) {
+            eprintln!("❌ Failed to save backup session metadata: {}", e);
         }
 
         // Save heartbeat file for health monitor
@@ -410,16 +449,31 @@ async fn run_autonomous_mode(
 
         let heartbeat_json = serde_json::to_string_pretty(&heartbeat).unwrap_or_default();
 
-        // Save heartbeat in session directory
+        // Save heartbeat in session directory and backup
         let heartbeat_path = session_logs_dir.join("heartbeat.json");
+        let backup_heartbeat_path = backup_logs_dir.join("heartbeat.json");
+        
         if let Err(e) = std::fs::write(&heartbeat_path, &heartbeat_json) {
             eprintln!("❌ Failed to save heartbeat: {}", e);
+        }
+        
+        if let Err(e) = std::fs::write(&backup_heartbeat_path, &heartbeat_json) {
+            eprintln!("❌ Failed to save backup heartbeat: {}", e);
         }
 
         // Also save heartbeat to global location for health monitor
         let global_heartbeat_path = PathBuf::from("./logs/latest_session_heartbeat.json");
+        let backup_global_heartbeat_path = dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("codex-logs-backup")
+            .join("latest_session_heartbeat.json");
+            
         if let Err(e) = std::fs::write(&global_heartbeat_path, &heartbeat_json) {
             eprintln!("❌ Failed to save global heartbeat: {}", e);
+        }
+        
+        if let Err(e) = std::fs::write(&backup_global_heartbeat_path, &heartbeat_json) {
+            eprintln!("❌ Failed to save backup global heartbeat: {}", e);
         }
     };
 
@@ -451,7 +505,7 @@ async fn run_autonomous_mode(
             let mut final_context = context.clone();
             let mut context_was_summarized = false;
             let context_tokens = count_tokens(&context)?;
-            const MAX_TOKENS: usize = 2_000;
+            const MAX_TOKENS: usize = 200_000;
             const TOKEN_BUFFER: usize = 500;
 
             if context_tokens > (MAX_TOKENS - TOKEN_BUFFER) {
@@ -493,20 +547,84 @@ async fn run_autonomous_mode(
             }
 
             // Generate user prompt using external LLM
-            let user_prompt =
-                generate_user_prompt(&driver_prompt, &autonomous_cli.driver_model).await?;
+            let (user_prompt, tool_results) =
+                generate_user_prompt(&driver_prompt, &autonomous_cli.driver_model, &session_logs_dir).await?;
 
             println!("💭 Generated user prompt: {}", user_prompt);
 
-            // Add user message to conversation log
-            conversation_log.push(serde_json::json!({
-                "role": "user",
-                "content": user_prompt
-            }));
+            // Handle supervisor LLM tool calls and generate final user prompt
+            let final_user_prompt = if !tool_results.is_empty() {
+                // Case 2: Supervisor made tool calls - need to get follow-up response
+                
+                // Add user message with tool calls to conversation log
+                conversation_log.push(serde_json::json!({
+                    "role": "user",
+                    "content": user_prompt,
+                    "tool_calls": tool_results.iter().map(|tr| serde_json::json!({
+                        "id": tr["tool_call_id"],
+                        "type": "function",
+                        "function": {
+                            "name": if tr["tool_call_id"].as_str().unwrap_or("").starts_with("write_note") { "write_note" } else { "read_notes" },
+                            "arguments": serde_json::json!({})
+                        }
+                    })).collect::<Vec<_>>()
+                }));
+
+                // Add tool results to conversation log
+                for tool_result in &tool_results {
+                    conversation_log.push(serde_json::json!({
+                        "role": "tool",
+                        "tool_call_id": tool_result["tool_call_id"],
+                        "content": tool_result["content"]
+                    }));
+                }
+
+                // Generate follow-up prompt from supervisor with tool results
+                let follow_up_context = format!("{}\n\nTool Results:\n{}", 
+                    final_context, 
+                    serde_json::to_string_pretty(&tool_results).unwrap_or_default()
+                );
+                
+                let follow_up_driver_prompt = inject_template_variables(
+                    &continuation_prompt_template,
+                    &config_content,
+                    &follow_up_context,
+                );
+
+                let (follow_up_prompt, _) = generate_user_prompt(
+                    &follow_up_driver_prompt,
+                    &autonomous_cli.driver_model,
+                    &session_logs_dir,
+                ).await?;
+
+                println!("🔄 Supervisor follow-up prompt: {}", follow_up_prompt);
+
+                // Add follow-up user message to conversation log
+                conversation_log.push(serde_json::json!({
+                    "role": "user",
+                    "content": follow_up_prompt
+                }));
+
+                // Update context with follow-up conversation
+                final_context = format!("{}\n\nUSER: {}\n\nASSISTANT: {}", 
+                    final_context, follow_up_prompt, follow_up_prompt);
+
+                follow_up_prompt
+            } else {
+                // Case 1: No tool calls - use original supervisor message directly
+                
+                // Add regular user message to conversation log
+                conversation_log.push(serde_json::json!({
+                    "role": "user",
+                    "content": user_prompt
+                }));
+
+                user_prompt
+            };
 
             // Submit to codex
             let input_items = vec![InputItem::Text {
-                text: user_prompt.clone(),
+                text: final_user_prompt.clone(),
             }];
             let submission_id = codex.submit(Op::UserInput { items: input_items }).await?;
 
@@ -519,6 +637,7 @@ async fn run_autonomous_mode(
                     &autonomous_cli.driver_model,
                     &approval_prompt_template,
                     &bugcrowd_approval_prompt_template,
+                    &session_logs_dir,
                 )
                 .await?;
 
@@ -685,6 +804,7 @@ async fn collect_codex_response_with_tools(
     driver_model: &str,
     approval_prompt_template: &str,
     bugcrowd_approval_prompt_template: &str,
+    session_logs_dir: &std::path::Path,
 ) -> anyhow::Result<(
     String,
     Vec<serde_json::Value>,
@@ -765,10 +885,10 @@ async fn collect_codex_response_with_tools(
                                     &tool.arguments,
                                 );
 
-                                match generate_user_prompt(&tool_approval_prompt, driver_model)
+                                match generate_user_prompt(&tool_approval_prompt, driver_model, &session_logs_dir)
                                     .await
                                 {
-                                    Ok(response) => {
+                                    Ok((response, _)) => {
                                         println!("🤖 External LLM response: {}", response);
                                         let (approved, reasoning) =
                                             parse_approval_response(&response);
@@ -888,12 +1008,13 @@ async fn collect_codex_response_with_tools(
                                 arg.contains("bugcrowd_submit") || arg.contains("bugcrowd-submit")
                             });
 
-                            // Generate approval prompt
-                            let approval_prompt = inject_approval_variables(
+                            // Generate approval prompt with task context
+                            let approval_prompt = inject_approval_variables_with_context(
                                 approval_prompt_template,
                                 &approval.command,
                                 &approval.cwd,
                                 &approval.reason,
+                                &config_content,
                             );
 
                             let context_info = if is_bugcrowd_submit {
@@ -908,8 +1029,8 @@ async fn collect_codex_response_with_tools(
                             );
 
                             let decision =
-                                match generate_user_prompt(&approval_prompt, driver_model).await {
-                                    Ok(response) => {
+                                match generate_user_prompt(&approval_prompt, driver_model, &session_logs_dir).await {
+                                    Ok((response, _)) => {
                                         println!("🤖 External LLM response: {}", response);
                                         if response.to_lowercase().contains("approve") {
                                             println!("✅ Approved by external LLM");
@@ -1071,6 +1192,24 @@ fn inject_approval_variables(
         .replace("{reason}", reason_str)
 }
 
+fn inject_approval_variables_with_context(
+    template: &str,
+    command: &[String],
+    cwd: &std::path::Path,
+    reason: &Option<String>,
+    config_content: &str,
+) -> String {
+    let command_str = format!("{:?}", command);
+    let cwd_str = format!("{:?}", cwd);
+    let reason_str = reason.as_deref().unwrap_or("No reason provided");
+
+    template
+        .replace("{command}", &command_str)
+        .replace("{cwd}", &cwd_str)
+        .replace("{reason}", reason_str)
+        .replace("{task_context}", config_content)
+}
+
 fn inject_bugcrowd_approval_variables(
     template: &str,
     tool: &str,
@@ -1145,7 +1284,7 @@ async fn summarize_context(
         "🔄 Context too long ({} tokens), summarizing...",
         count_tokens(context).unwrap_or(0)
     );
-    let summary = generate_user_prompt(&summarization_prompt, model).await?;
+    let (summary, _) = generate_user_prompt(&summarization_prompt, model, &std::path::Path::new("./logs")).await?;
     println!(
         "✅ Context summarized from {} to {} tokens",
         count_tokens(context).unwrap_or(0),
@@ -1155,13 +1294,14 @@ async fn summarize_context(
     Ok(summary)
 }
 
-async fn generate_user_prompt(driver_prompt: &str, model: &str) -> anyhow::Result<String> {
+async fn generate_user_prompt(driver_prompt: &str, model: &str, session_logs_dir: &std::path::Path) -> anyhow::Result<(String, Vec<serde_json::Value>)> {
     use codex_core::client::ModelClient;
     use codex_core::client_common::Prompt;
     use codex_core::config_types::{ReasoningEffort, ReasoningSummary};
     use codex_core::model_provider_info::{ModelProviderInfo, WireApi};
-    use codex_core::models::{ContentItem, ResponseItem};
+    use codex_core::models::{ContentItem, ResponseItem, FunctionCallOutputPayload};
     use futures::StreamExt;
+    use std::collections::HashMap;
 
     println!("🔄 Calling {} with driver prompt...", model);
 
@@ -1193,12 +1333,44 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str) -> anyhow::Resul
         }],
     };
 
+    // Create note-taking tools
+    let mut extra_tools = std::collections::HashMap::new();
+    
+    // Tool to write a note
+    extra_tools.insert("write_note".to_string(), mcp_types::Tool {
+        name: "write_note".to_string(),
+        description: Some("Write a note to remember important information, observations, or decisions for future reference".to_string()),
+        annotations: None,
+        input_schema: mcp_types::ToolInputSchema {
+            r#type: "object".to_string(),
+            properties: Some(serde_json::json!({
+                "content": {
+                    "type": "string",
+                    "description": "Content to write to the note"
+                }
+            })),
+            required: Some(vec!["content".to_string()]),
+        },
+    });
+    
+    // Tool to read notes
+    extra_tools.insert("read_notes".to_string(), mcp_types::Tool {
+        name: "read_notes".to_string(),
+        description: Some("Read all existing notes to recall previous observations and decisions".to_string()),
+        annotations: None,
+        input_schema: mcp_types::ToolInputSchema {
+            r#type: "object".to_string(),
+            properties: Some(serde_json::json!({})),
+            required: Some(vec![]),
+        },
+    });
+
     let prompt = Prompt {
-        input: vec![user_message],
+        input: vec![user_message.clone()],
         prev_id: None,
         user_instructions: None,
         store: false,
-        extra_tools: std::collections::HashMap::new(),
+        extra_tools,
     };
 
     // Make the API call
@@ -1208,6 +1380,7 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str) -> anyhow::Resul
         .with_context(|| "Failed to create response stream")?;
 
     let mut response_text = String::new();
+    let mut tool_calls = Vec::new();
 
     // Collect the response
     while let Some(event) = response_stream.next().await {
@@ -1215,12 +1388,28 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str) -> anyhow::Resul
             Ok(response_event) => {
                 match response_event {
                     codex_core::client_common::ResponseEvent::OutputItemDone(item) => {
-                        if let ResponseItem::Message { content, .. } = item {
-                            for content_item in content {
-                                if let ContentItem::OutputText { text } = content_item {
-                                    response_text.push_str(&text);
+                        match item {
+                            ResponseItem::Message { content, .. } => {
+                                for content_item in content {
+                                    match content_item {
+                                        ContentItem::OutputText { text } => {
+                                            response_text.push_str(&text);
+                                        }
+                                        _ => {}
+                                    }
                                 }
                             }
+                            ResponseItem::FunctionCall { name, arguments, call_id } => {
+                                tool_calls.push(serde_json::json!({
+                                    "id": call_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": name,
+                                        "arguments": arguments
+                                    }
+                                }));
+                            }
+                            _ => {}
                         }
                     }
                     codex_core::client_common::ResponseEvent::Completed { .. } => {
@@ -1237,11 +1426,199 @@ async fn generate_user_prompt(driver_prompt: &str, model: &str) -> anyhow::Resul
         }
     }
 
+    // Handle tool calls
+    if !tool_calls.is_empty() {
+        let tool_results = handle_supervisor_tool_calls(&tool_calls, session_logs_dir).await?;
+        
+        // Add tool calls and results to conversation and get new instruction
+        let mut conversation = vec![user_message];
+        
+        // Add the assistant's response with tool calls
+        conversation.push(ResponseItem::Message {
+            role: "assistant".to_string(),
+            content: if response_text.trim().is_empty() {
+                vec![]
+            } else {
+                vec![ContentItem::OutputText { text: response_text.trim().to_string() }]
+            },
+        });
+        
+        // Add function calls
+        for tool_call in &tool_calls {
+            conversation.push(ResponseItem::FunctionCall {
+                name: tool_call["function"]["name"].as_str().unwrap_or("unknown").to_string(),
+                arguments: serde_json::to_string(&tool_call["function"]["arguments"]).unwrap_or("{}".to_string()),
+                call_id: tool_call["id"].as_str().unwrap_or("unknown").to_string(),
+            });
+        }
+        
+        // Add tool results
+        for tool_result in &tool_results {
+            conversation.push(ResponseItem::FunctionCallOutput {
+                call_id: tool_result["tool_call_id"].as_str().unwrap_or("unknown").to_string(),
+                output: FunctionCallOutputPayload {
+                    content: tool_result["content"].as_str().unwrap_or("").to_string(),
+                    success: Some(true),
+                },
+            });
+        }
+        
+        // Make another call to get the follow-up instruction
+        let follow_up_prompt = Prompt {
+            input: conversation,
+            prev_id: None,
+            user_instructions: None,
+            store: false,
+            extra_tools: HashMap::new(), // No tools for follow-up
+        };
+        
+        let mut follow_up_stream = client
+            .stream(&follow_up_prompt)
+            .await
+            .with_context(|| "Failed to create follow-up response stream")?;
+        
+        let mut follow_up_text = String::new();
+        
+        // Collect follow-up response
+        while let Some(event) = follow_up_stream.next().await {
+            match event {
+                Ok(response_event) => {
+                    match response_event {
+                        codex_core::client_common::ResponseEvent::OutputItemDone(item) => {
+                            match item {
+                                ResponseItem::Message { content, .. } => {
+                                    for content_item in content {
+                                        match content_item {
+                                            ContentItem::OutputText { text } => {
+                                                follow_up_text.push_str(&text);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        codex_core::client_common::ResponseEvent::Completed { .. } => {
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!("Error in follow-up response stream: {}", e));
+                }
+            }
+        }
+        
+        return Ok((follow_up_text.trim().to_string(), tool_results));
+    }
+
     if response_text.is_empty() {
         return Err(anyhow::anyhow!("No response received from external LLM"));
     }
 
-    Ok(response_text.trim().to_string())
+    Ok((response_text.trim().to_string(), Vec::new()))
+}
+
+async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_logs_dir: &std::path::Path) -> anyhow::Result<Vec<serde_json::Value>> {
+    let mut tool_results = Vec::new();
+    let notes_dir = session_logs_dir.join("notes");
+    
+    // Ensure notes directory exists
+    std::fs::create_dir_all(&notes_dir).with_context(|| "Failed to create notes directory")?;
+    
+    for tool_call in tool_calls {
+        let tool_id = tool_call["id"].as_str().unwrap_or("unknown");
+        let tool_name = tool_call["function"]["name"].as_str().unwrap_or("unknown");
+        let arguments = &tool_call["function"]["arguments"];
+        
+        println!("🔧 Processing tool call: id={}, name={}", tool_id, tool_name);
+        match tool_name {
+            "write_note" => {
+                let content = arguments["content"].as_str().unwrap_or("");
+                let timestamp = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC");
+                let note_content = format!("[{}] {}\n", timestamp, content);
+                
+                // Generate a timestamped filename
+                let filename = format!("note_{}.txt", chrono::Utc::now().format("%Y%m%d_%H%M%S"));
+                let note_path = notes_dir.join(&filename);
+                
+                match std::fs::write(&note_path, &note_content) {
+                    Ok(_) => {
+                        tool_results.push(serde_json::json!({
+                            "tool_call_id": tool_id,
+                            "content": format!("Note written successfully to {}", filename)
+                        }));
+                        println!("📝 Supervisor wrote note: {}", filename);
+                    }
+                    Err(e) => {
+                        tool_results.push(serde_json::json!({
+                            "tool_call_id": tool_id,
+                            "content": format!("Error writing note: {}", e)
+                        }));
+                    }
+                }
+            }
+            "read_notes" => {
+                let mut all_notes = String::new();
+                
+                match std::fs::read_dir(&notes_dir) {
+                    Ok(entries) => {
+                        let mut note_files: Vec<_> = entries
+                            .filter_map(|entry| {
+                                let entry = entry.ok()?;
+                                let path = entry.path();
+                                if path.extension()?.to_str()? == "txt" {
+                                    Some(path)
+                                } else {
+                                    None
+                                }
+                            })
+                            .collect();
+                        
+                        // Sort by filename (which includes timestamp)
+                        note_files.sort();
+                        
+                        if note_files.is_empty() {
+                            all_notes = "No notes yet.".to_string();
+                        } else {
+                            for note_path in note_files {
+                                match std::fs::read_to_string(&note_path) {
+                                    Ok(content) => {
+                                        all_notes.push_str(&content);
+                                        if !content.ends_with('\n') {
+                                            all_notes.push('\n');
+                                        }
+                                    }
+                                    Err(e) => {
+                                        all_notes.push_str(&format!("Error reading {}: {}\n", note_path.display(), e));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        all_notes = "No notes yet.".to_string();
+                    }
+                }
+                
+                tool_results.push(serde_json::json!({
+                    "tool_call_id": tool_id,
+                    "content": all_notes
+                }));
+                println!("📖 Supervisor read notes");
+            }
+            _ => {
+                tool_results.push(serde_json::json!({
+                    "tool_call_id": tool_id,
+                    "content": format!("Unknown tool: {}", tool_name)
+                }));
+            }
+        }
+    }
+    
+    Ok(tool_results)
 }
 
 /// Prepend root-level overrides so they have lower precedence than

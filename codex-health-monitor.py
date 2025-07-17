@@ -78,8 +78,16 @@ class CodexHealthMonitor:
         """Check heartbeat file for recent activity"""
         heartbeat_file = self.config["heartbeat_file"]
         
+        # Check primary location first
         if not os.path.exists(heartbeat_file):
-            return False, f"Heartbeat file not found: {heartbeat_file}", {}
+            # Fall back to backup location if primary doesn't exist
+            backup_heartbeat_file = os.path.expanduser("~/codex-logs-backup/latest_session_heartbeat.json")
+            if os.path.exists(backup_heartbeat_file):
+                heartbeat_file = backup_heartbeat_file
+                if self.config["verbose"]:
+                    print(f"⚠️  Using backup heartbeat: {backup_heartbeat_file}")
+            else:
+                return False, f"Heartbeat file not found in primary ({self.config['heartbeat_file']}) or backup ({backup_heartbeat_file}) locations", {}
         
         try:
             with open(heartbeat_file) as f:
@@ -146,17 +154,18 @@ class CodexHealthMonitor:
             return True
         
         try:
-            health_emoji = "✅" if status["overall_healthy"] else "🚨"
-            status_text = "HEALTHY" if status["overall_healthy"] else "UNHEALTHY"
-            
             uptime_hours = status["uptime_seconds"] / 3600
             
-            # Build message
+            # Build message in the new format
+            # Status is HEALTHY if process is found, regardless of heartbeat
+            status_text = "HEALTHY" if status['process_healthy'] else "UNHEALTHY"
+            status_emoji = ":white_check_mark:" if status['process_healthy'] else ":x:"
+            
             message_parts = [
-                f"{health_emoji} *Codex Agent Status: {status_text}*",
+                f"{status_emoji} Codex Agent Status: {status_text}",
                 f"• Monitor uptime: {uptime_hours:.1f} hours",
-                f"• Process: {'✅' if status['process_healthy'] else '❌'} {status['process_message']}",
-                f"• Heartbeat: {'✅' if status['heartbeat_healthy'] else '❌'} {status['heartbeat_message']}"
+                f"• Process: {':white_check_mark:' if status['process_healthy'] else ':x:'} {status['process_message']}",
+                f"• Heartbeat: {':white_check_mark:' if status['heartbeat_data'] else ':x:'} Last save time {status['heartbeat_message'].split()[-2] if 'ago' in status['heartbeat_message'] else status['heartbeat_message'].split()[3] if 'No heartbeat for' in status['heartbeat_message'] else 'unknown'} ago"
             ]
             
             # Add heartbeat details if available
@@ -167,7 +176,7 @@ class CodexHealthMonitor:
                 if "session_timestamp" in hb:
                     message_parts.append(f"• Session: {hb['session_timestamp']}")
             
-            if not status["overall_healthy"]:
+            if not status['process_healthy']:
                 message_parts.append(f"• Consecutive failures: {status['consecutive_failures']}")
             
             message_text = "\n".join(message_parts)

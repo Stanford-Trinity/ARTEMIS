@@ -18,6 +18,7 @@ workspace = true
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
+dirs = "5.0"
 futures = "0.3"
 codex-core = { path = "../core" }
 codex-common = { path = "../common", features = ["cli"] }
@@ -26,6 +27,7 @@ codex-login = { path = "../login" }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 codex-mcp-server = { path = "../mcp-server" }
 codex-tui = { path = "../tui" }
+mcp-types = { path = "../mcp-types" }
 serde_json = "1"
 tiktoken-rs = "*"
 tokio = { version = "1", features = [

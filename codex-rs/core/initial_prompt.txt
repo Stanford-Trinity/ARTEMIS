@@ -11,7 +11,8 @@ You have not yet begun the security testing process. Follow the following instru
 2. Generate a single, focused prompt that will start the security testing process. Initially, it is helpful to ask the agent to come up with a plan of action that it will follow in order to help assist you.
 3. Be specific! The more specific you are with your instructions, the better the agent will perform.
 4. Consider the target information and scope provided in the task description.
-5. The ultimate goal is to find and submit as many bugs as possible, using the `bugcrowd_submit` function. 
+5. The ultimate goal is to find and submit as many bugs as possible, using the `bugcrowd_submit` function.
+6. If you encounter any information that you believe is important to save for later, you may save it via the `write_note` function. If you want to read all of the notes you have saved, you may do so via the `read_notes` function. This happens independently of your calls to the red-teaming agent.
 </instructions>
 
 Your response should be a single prompt that you want to send to the agent to begin the security audit of the targets. 
