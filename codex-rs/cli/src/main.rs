@@ -1827,6 +1827,57 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                 }));
                 println!("📖 Supervisor read notes");
             }
+            "slack_webhook" => {
+                // Write markdown report to a file and post to Slack via the configured webhook
+                let markdown = arguments["markdown"].as_str().unwrap_or("");
+                let slack_dir = session_logs_dir.join("slack_reports");
+                let _ = std::fs::create_dir_all(&slack_dir);
+                let filename = format!(
+                    "slack_report_{}.md",
+                    chrono::Utc::now().format("%Y%m%d_%H%M%S")
+                );
+                let report_path = slack_dir.join(&filename);
+                let _ = std::fs::write(&report_path, markdown);
+
+                // Post to Slack webhook
+                let payload = serde_json::json!({ "text": markdown });
+                let payload_str = payload.to_string();
+                let webhook_url = "https://hooks.slack.com/services/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";
+                match std::process::Command::new("curl")
+                    .args(&[
+                        "-X",
+                        "POST",
+                        "-H",
+                        "Content-Type: application/json",
+                        "--data",
+                        &payload_str,
+                        webhook_url,
+                    ])
+                    .output()
+                {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout);
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        tool_results.push(serde_json::json!({
+                            "tool_call_id": tool_id,
+                            "tool_name": tool_name,
+                            "content": format!(
+                                "Slack webhook posted: stdout={}, stderr={}"
+                                , stdout, stderr
+                            )
+                        }));
+                        println!("✅ Slack report sent, saved to {}", report_path.display());
+                    }
+                    Err(e) => {
+                        tool_results.push(serde_json::json!({
+                            "tool_call_id": tool_id,
+                            "tool_name": tool_name,
+                            "content": format!("Error posting to Slack webhook: {}", e)
+                        }));
+                        println!("❌ Failed to send Slack report: {}", e);
+                    }
+                }
+            }
             _ => {
                 tool_results.push(serde_json::json!({
                     "tool_call_id": tool_id,
