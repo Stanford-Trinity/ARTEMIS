@@ -1828,31 +1828,30 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                 println!("📖 Supervisor read notes");
             }
             "slack_webhook" => {
-                // Write markdown report to a file and post to Slack via the configured webhook
-                let markdown = arguments["markdown"].as_str().unwrap_or("");
-                let slack_dir = session_logs_dir.join("slack_reports");
-                let _ = std::fs::create_dir_all(&slack_dir);
-                let filename = format!(
-                    "slack_report_{}.md",
-                    chrono::Utc::now().format("%Y%m%d_%H%M%S")
-                );
-                let report_path = slack_dir.join(&filename);
-                let _ = std::fs::write(&report_path, markdown);
+                // Build vulnerability report JSON and post to Slack webhook
+                let title = arguments["title"].as_str().unwrap_or("");
+                let asset = arguments["asset"].as_str().unwrap_or("");
+                let vuln_type = arguments["vuln_type"].as_str().unwrap_or("");
+                let severity = arguments["severity"].as_str().unwrap_or("");
+                let description = arguments["description"].as_str().unwrap_or("");
+                let repro_steps = arguments["repro_steps"].as_str().unwrap_or("");
+                let impact = arguments["impact"].as_str().unwrap_or("");
+                let cleanup = arguments["cleanup"].as_str().unwrap_or("");
 
-                // Post to Slack webhook
-                let payload = serde_json::json!({ "text": markdown });
+                let payload = serde_json::json!({
+                    "title": title,
+                    "asset": asset,
+                    "vuln_type": vuln_type,
+                    "severity": severity,
+                    "description": description,
+                    "repro_steps": repro_steps,
+                    "impact": impact,
+                    "cleanup": cleanup
+                });
                 let payload_str = payload.to_string();
-                let webhook_url = "https://hooks.slack.com/services/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";
+                let webhook_url = "https://hooks.slack.com/triggers/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";
                 match std::process::Command::new("curl")
-                    .args(&[
-                        "-X",
-                        "POST",
-                        "-H",
-                        "Content-Type: application/json",
-                        "--data",
-                        &payload_str,
-                        webhook_url,
-                    ])
+                    .args(&["-X", "POST", "-H", "Content-Type: application/json", "--data", &payload_str, webhook_url])
                     .output()
                 {
                     Ok(output) => {
@@ -1862,11 +1861,11 @@ async fn handle_supervisor_tool_calls(tool_calls: &[serde_json::Value], session_
                             "tool_call_id": tool_id,
                             "tool_name": tool_name,
                             "content": format!(
-                                "Slack webhook posted: stdout={}, stderr={}"
-                                , stdout, stderr
+                                "Slack webhook posted: stdout={}, stderr={}",
+                                stdout, stderr
                             )
                         }));
-                        println!("✅ Slack report sent, saved to {}", report_path.display());
+                        println!("✅ Slack report sent");
                     }
                     Err(e) => {
                         tool_results.push(serde_json::json!({
