@@ -1,0 +1,12 @@
+# Example codex configuration to include the bugcrowd MCP server
+# Add this to your ~/.codex/config.toml file
+
+[mcp_servers.bugcrowd]
+command = "node"
+args = ["/Users/eliot/Desktop/work/papers/codex/mcp-bugcrowd/dist/index.js"]
+# No env needed - will read from system environment or .env file
+
+# Optional: Set sandbox mode to allow network access for API calls
+[sandbox]
+mode = "workspace-write"
+network_access = true
