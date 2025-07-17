@@ -107,6 +107,9 @@ struct AutonomousCommand {
     /// End hour for active operation (0-23, Pacific time).
     #[clap(long, default_value = "23")]
     work_end_hour: u8,
+    /// Ignore Pacific time work-hour pauses and run continuously.
+    #[clap(long)]
+    ignore_work_hours: bool,
 
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
@@ -854,8 +857,10 @@ async fn run_autonomous_mode(
             // Save checkpoint after each iteration
             save_checkpoint(&conversation_log, iteration as u32);
 
-            // Check if we should pause for work hours
-            if is_outside_work_hours(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour) {
+            // Check if we should pause for work hours (unless disabled)
+            if !autonomous_cli.ignore_work_hours
+                && is_outside_work_hours(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour)
+            {
                 let next_work_time = calculate_next_work_time(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour);
                 println!("⏸️  Outside work hours ({}:00-{}:00 Pacific). Pausing until {}", 
                     autonomous_cli.work_start_hour, autonomous_cli.work_end_hour, 
