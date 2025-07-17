@@ -1078,6 +1078,84 @@ async fn collect_codex_response_with_tools(
                                 println!("✅ Approval decision submitted");
                             }
                         }
+                        EventMsg::ApplyPatchApprovalRequest(patch_approval) => {
+                            println!("🔍 Patch approval requested for {} files", patch_approval.changes.len());
+
+                            // Add patch approval request as a tool call
+                            let approval_id = format!(
+                                "patch_approval_{}",
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis()
+                            );
+                            tool_calls.push(serde_json::json!({
+                                "id": approval_id.clone(),
+                                "type": "function",
+                                "function": {
+                                    "name": "request_patch_approval",
+                                    "arguments": serde_json::to_string(&patch_approval).unwrap_or_default()
+                                }
+                            }));
+
+                            // Generate patch approval prompt with task context
+                            let patch_approval_prompt = inject_patch_approval_variables_with_context(
+                                approval_prompt_template,
+                                &patch_approval.changes,
+                                &patch_approval.reason,
+                                &config_content,
+                            );
+
+                            println!("🤖 Requesting patch approval from external LLM...");
+
+                            let decision =
+                                match generate_user_prompt(&patch_approval_prompt, driver_model, &session_logs_dir).await {
+                                    Ok((response, _)) => {
+                                        println!("🤖 External LLM response: {}", response);
+                                        if response.to_lowercase().contains("approve") {
+                                            println!("✅ Patch approved by external LLM");
+                                            codex_core::protocol::ReviewDecision::Approved
+                                        } else {
+                                            println!("❌ Patch denied by external LLM");
+                                            codex_core::protocol::ReviewDecision::Denied
+                                        }
+                                    }
+                                    Err(e) => {
+                                        println!(
+                                            "❌ Error getting patch approval from external LLM: {}",
+                                            e
+                                        );
+                                        codex_core::protocol::ReviewDecision::Denied
+                                    }
+                                };
+
+                            // Add patch approval decision as a tool response
+                            tool_responses.push(serde_json::json!({
+                                "role": "tool",
+                                "tool_call_id": approval_id,
+                                "content": serde_json::to_string(&serde_json::json!({
+                                    "decision": decision,
+                                    "llm_response": match &decision {
+                                        codex_core::protocol::ReviewDecision::Approved => "✅ Patch approved by external LLM",
+                                        codex_core::protocol::ReviewDecision::Denied => "❌ Patch denied by external LLM",
+                                        _ => "❓ Unknown decision"
+                                    }
+                                })).unwrap_or_default()
+                            }));
+
+                            // Submit the patch approval decision back to codex
+                            if let Err(e) = codex
+                                .submit(codex_core::protocol::Op::ApplyPatchApproval {
+                                    id: event.id.clone(),
+                                    decision,
+                                })
+                                .await
+                            {
+                                println!("❌ Failed to submit patch approval decision: {}", e);
+                            } else {
+                                println!("✅ Patch approval decision submitted");
+                            }
+                        }
                         EventMsg::TaskStarted => {
                             println!("📝 Event: TaskStarted");
                             // Add as a system event
@@ -1210,6 +1288,23 @@ fn inject_approval_variables_with_context(
         .replace("{cwd}", &cwd_str)
         .replace("{reason}", reason_str)
         .replace("{task_context}", config_content)
+}
+
+fn inject_patch_approval_variables_with_context(
+    template: &str,
+    changes: &std::collections::HashMap<std::path::PathBuf, codex_core::protocol::FileChange>,
+    reason: &Option<String>,
+    config_content: &str,
+) -> String {
+    let changes_str = format!("{:#?}", changes);
+    let reason_str = reason.as_deref().unwrap_or("No reason provided");
+
+    template
+        .replace("{command}", &format!("Apply patch to {} files", changes.len()))
+        .replace("{cwd}", ".")
+        .replace("{reason}", reason_str)
+        .replace("{task_context}", config_content)
+        .replace("{changes}", &changes_str)
 }
 
 fn inject_bugcrowd_approval_variables(
