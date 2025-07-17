@@ -1145,7 +1145,7 @@ async fn collect_codex_response_with_tools(
 
                             // Submit the patch approval decision back to codex
                             if let Err(e) = codex
-                                .submit(codex_core::protocol::Op::ApplyPatchApproval {
+                                .submit(codex_core::protocol::Op::PatchApproval {
                                     id: event.id.clone(),
                                     decision,
                                 })
