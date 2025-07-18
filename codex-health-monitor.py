@@ -154,39 +154,35 @@ class CodexHealthMonitor:
             return True
         
         try:
-            uptime_hours = status["uptime_seconds"] / 3600
-            
-            # Build message in the new format
-            # Status is HEALTHY if process is found, regardless of heartbeat
-            status_text = "HEALTHY" if status['process_healthy'] else "UNHEALTHY"
-            status_emoji = ":white_check_mark:" if status['process_healthy'] else ":x:"
-            
-            message_parts = [
-                f"{status_emoji} Codex Agent Status: {status_text}",
-                f"• Monitor uptime: {uptime_hours:.1f} hours",
-                f"• Process: {':white_check_mark:' if status['process_healthy'] else ':x:'} {status['process_message']}",
-                f"• Heartbeat: {':white_check_mark:' if status['heartbeat_data'] else ':x:'} Last save time {status['heartbeat_message'].split()[-2] if 'ago' in status['heartbeat_message'] else status['heartbeat_message'].split()[3] if 'No heartbeat for' in status['heartbeat_message'] else 'unknown'} ago"
-            ]
-            
-            # Add heartbeat details if available
-            if status["heartbeat_data"]:
-                hb = status["heartbeat_data"]
-                if "iteration" in hb:
-                    message_parts.append(f"• Iterations completed: {hb['iteration']}")
-                if "session_timestamp" in hb:
-                    message_parts.append(f"• Session: {hb['session_timestamp']}")
-            
+            # Only send notification if process is unhealthy
             if not status['process_healthy']:
-                message_parts.append(f"• Consecutive failures: {status['consecutive_failures']}")
-            
-            message_text = "\n".join(message_parts)
-            
-            payload = {
-                "username": "🤖 Codex Health Monitor",
-                "text": message_text
-            }
-            
-            response = requests.post(webhook_url, json=payload, timeout=10)
+                uptime_hours = status["uptime_seconds"] / 3600
+                
+                # Build message in the new format
+                status_text = "UNHEALTHY"
+                status_emoji = ":x:"
+                
+                message_parts = [
+                    f"{status_emoji} Codex Agent Status: {status_text}",
+                    f"• Monitor uptime: {uptime_hours:.1f} hours",
+                    f"• Process: {':x:'} {status['process_message']}",
+                    f"• Heartbeat: {':white_check_mark:' if status['heartbeat_data'] else ':x:'} Last save time {status['heartbeat_message'].split()[-2] if 'ago' in status['heartbeat_message'] else status['heartbeat_message'].split()[3] if 'No heartbeat for' in status['heartbeat_message'] else 'unknown'} ago",
+                    f"• Consecutive failures: {status['consecutive_failures']}"
+                ]
+                
+                message_text = "\n".join(message_parts)
+                
+                payload = {
+                    "username": "🤖 Codex Health Monitor",
+                    "text": message_text
+                }
+                
+                response = requests.post(webhook_url, json=payload, timeout=10)
+            else:
+                # Process is healthy, skip notification
+                if self.config["verbose"]:
+                    print("📢 Process is healthy, skipping Slack notification")
+                return True
             
             if response.status_code == 200:
                 if self.config["verbose"]:
