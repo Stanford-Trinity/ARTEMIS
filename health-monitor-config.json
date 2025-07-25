@@ -1,0 +1,9 @@
+{
+  "check_interval_seconds": 30,
+  "slack_update_interval_minutes": 10,
+  "slack_webhook_url": "https://hooks.slack.com/services/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",
+  "max_idle_minutes": 15,
+  "heartbeat_file": "./codex-rs/logs/latest_session_heartbeat.json",
+  "codex_process_name": "target/debug/codex",
+  "verbose": true
+}

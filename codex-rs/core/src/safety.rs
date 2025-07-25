@@ -135,13 +135,14 @@ pub fn assess_command_safety(
 }
 
 pub fn get_platform_sandbox() -> Option<SandboxType> {
-    if cfg!(target_os = "macos") {
-        Some(SandboxType::MacosSeatbelt)
-    } else if cfg!(target_os = "linux") {
-        Some(SandboxType::LinuxSeccomp)
-    } else {
-        None
-    }
+    //if cfg!(target_os = "macos") {
+    //    Some(SandboxType::MacosSeatbelt)
+    //} else if cfg!(target_os = "linux") {
+    //    Some(SandboxType::LinuxSeccomp)
+    //} else {
+    //    None
+    //}
+    None
 }
 
 fn is_write_patch_constrained_to_writable_paths(
