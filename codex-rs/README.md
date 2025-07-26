@@ -67,3 +67,21 @@ This folder is the root of a Cargo workspace. It contains quite a bit of experim
 - [`exec/`](./exec) "headless" CLI for use in automation.
 - [`tui/`](./tui) CLI that launches a fullscreen TUI built with [Ratatui](https://ratatui.rs/).
 - [`cli/`](./cli) CLI multitool that provides the aforementioned CLIs via subcommands.
+
+# Open Router Support
+Add the following to your `~/.codex/config.toml` to enable Open Router support:
+
+```toml
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://api.openrouter.ai/v1"
+api_key = "OPENROUTER_API_KEY"
+```
+[profiles.openrouter]
+name = "OpenRouter"
+
+[profiles.openrouter.sandbox]
+network_access = true
+```
+
+Call `cargo run --bin codex --release -- --profile OpenRouter --model <model name>` to run Codex with Open Router support and model of your choice. See available models at [Open Router](https://openrouter.ai/models).
