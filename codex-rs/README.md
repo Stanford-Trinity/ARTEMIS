@@ -76,7 +76,6 @@ Add the following to your `~/.codex/config.toml` to enable Open Router support:
 name = "OpenRouter"
 base_url = "https://api.openrouter.ai/v1"
 api_key = "OPENROUTER_API_KEY"
-```
 [profiles.openrouter]
 name = "OpenRouter"
 
