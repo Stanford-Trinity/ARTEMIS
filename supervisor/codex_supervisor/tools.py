@@ -292,7 +292,7 @@ class SupervisorTools:
                 "type": "function",
                 "function": {
                     "name": "wait_for_instance",
-                    "description": "Wait for a specific instance to respond or reach a callback point",
+                    "description": "Wait for a specific instance to reach waiting_for_followup status (when it needs supervisor input) or complete/fail",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -303,11 +303,6 @@ class SupervisorTools:
                             "timeout_minutes": {
                                 "type": "number",
                                 "description": "Maximum time to wait in minutes (default: 5)"
-                            },
-                            "expected_status": {
-                                "type": "string",
-                                "enum": ["waiting_for_followup", "completed", "any"],
-                                "description": "Status to wait for (default: waiting_for_followup)"
                             }
                         },
                         "required": ["instance_id"]
@@ -688,10 +683,9 @@ class SupervisorTools:
             return f"❌ Error reading todo list: {e}"
 
     async def _wait_for_instance(self, args: Dict[str, Any]) -> str:
-        """Wait for a specific instance to reach a callback point or timeout."""
+        """Wait for a specific instance to reach waiting_for_followup status or complete/fail."""
         instance_id = args["instance_id"]
         timeout_minutes = args.get("timeout_minutes", 5)
-        expected_status = args.get("expected_status", "waiting_for_followup")
         
         # Check if instance exists
         if instance_id not in self.instance_manager.instances:
@@ -701,10 +695,9 @@ class SupervisorTools:
         if instance["status"] != "running":
             return f"❌ Instance {instance_id} is not running (status: {instance['status']})"
         
-        # The actual log directory where codex writes files (in the workspace)
+        # The actual log directory where codex writes files (logs directly in workspace)
         workspace_dir = instance.get("workspace_dir", instance_id)
-        session_id = str(self.session_dir.name)  # Get session ID from session dir name
-        actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "instances" / instance_id
+        actual_log_dir = self.session_dir / "workspaces" / workspace_dir
         status_file = actual_log_dir / "status.json"
         
         timeout_seconds = timeout_minutes * 60
@@ -761,21 +754,20 @@ class SupervisorTools:
                             status_data = json.loads(await f.read())
                         
                         current_status = status_data.get("status")
-                        logging.info(f"🔍 Instance {instance_id} status: '{current_status}', expecting: '{expected_status}'")
+                        logging.info(f"🔍 Instance {instance_id} status: '{current_status}'")
                         
                         # Always break on waiting_for_followup regardless of expected status
                         if current_status == "waiting_for_followup":
                             logging.info(f"🔄 Instance {instance_id} needs followup, breaking wait loop")
-                            # Read the latest response from final result file
-                            conversation_file = actual_log_dir / "final_result.json"
+                            # Read the latest response from realtime conversation file
+                            conversation_file = actual_log_dir / "realtime_conversation.json"
                             last_response = "No response available"
                             if conversation_file.exists():
                                 try:
                                     async with aiofiles.open(conversation_file, 'r') as f:
-                                        final_result = json.loads(await f.read())
+                                        conversation = json.loads(await f.read())
                                     
-                                    # Get the last assistant message from conversation array
-                                    conversation = final_result.get("conversation", [])
+                                    # Get the last assistant message
                                     for msg in reversed(conversation):
                                         if msg.get("role") == "assistant":
                                             last_response = msg.get("content", "")[:200] + ("..." if len(msg.get("content", "")) > 200 else "")
@@ -785,15 +777,14 @@ class SupervisorTools:
                             
                             return f"🔄 Instance {instance_id} is waiting for followup. Last response: '{last_response}'. Use send_followup to continue."
                         
-                        # Check if we got the expected status
-                        elif expected_status == "any" or current_status == expected_status:
-                            logging.info(f"✅ Status match found for {instance_id}: {current_status}")
+                        # Check if instance completed or failed
+                        elif current_status in ["completed", "failed"]:
+                            logging.info(f"✅ Instance {instance_id} finished with status: {current_status}")
                             if current_status == "completed":
                                 return f"✅ Instance {instance_id} completed"
                             else:
-                                return f"📊 Instance {instance_id} status: {current_status}"
-                    else:
-                        logging.info(f"📋 Status file not found for {instance_id}, still waiting...")
+                                return f"❌ Instance {instance_id} failed"
+                    # Status file not found, continue waiting
                         
                     # Sleep before next check
                     await asyncio.sleep(2)  # Check every 2 seconds

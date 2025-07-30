@@ -24,8 +24,6 @@ class InstanceManager:
         self.session_dir = session_dir
         self.codex_binary = codex_binary
         self.instances: Dict[str, Dict[str, Any]] = {}
-        self.instances_dir = session_dir / "instances"
-        self.instances_dir.mkdir(exist_ok=True)
     
     async def spawn_instance(self, instance_id: str, task_description: str, 
                            workspace_dir: str, duration_minutes: int) -> bool:
@@ -34,21 +32,17 @@ class InstanceManager:
             logging.warning(f"Instance {instance_id} already exists")
             return False
         
-        # Create instance log directory
-        instance_log_dir = self.instances_dir / instance_id
-        instance_log_dir.mkdir(exist_ok=True)
-        
-        # Prepare workspace directory
+        # Prepare workspace directory (simplified structure)
         workspace_path = self.session_dir / "workspaces" / workspace_dir
         workspace_path.mkdir(parents=True, exist_ok=True)
         
-        # Build codex command
+        # Build codex command - logs go directly in workspace, no separate log dir
         cmd = [
             self.codex_binary,
             "exec",
-            "--full-auto",
-            "-c", "sandbox.mode=danger-full-access",
-            "--log-session-dir", str(instance_log_dir),
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--log-session-dir", str(workspace_path),
             "--instance-id", instance_id,
             "--wait-for-followup",
             "-C", str(workspace_path),
@@ -57,11 +51,14 @@ class InstanceManager:
         
         try:
             # Start the codex process in its own process group for proper cleanup
+            # Pass through environment variables including API keys
+            env = os.environ.copy()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 cwd=workspace_path,
+                env=env,
                 preexec_fn=os.setsid if hasattr(os, 'setsid') else None
             )
             
@@ -72,7 +69,7 @@ class InstanceManager:
                 "workspace_dir": workspace_dir,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "duration_minutes": duration_minutes,
-                "log_dir": instance_log_dir,
+                "log_dir": workspace_path,  # Logs go directly in workspace now
                 "status": "running"
             }
             
@@ -238,16 +235,33 @@ class InstanceManager:
 class LogReader:
     """Reads logs from codex instances."""
     
-    def __init__(self, instances_dir: Path):
-        self.instances_dir = instances_dir
+    def __init__(self, session_dir: Path):
+        self.session_dir = session_dir
     
     async def read_instance_logs(self, instance_id: str, format_type: str = "readable", 
                                tail_lines: Optional[int] = None) -> str:
         """Read logs from a specific instance."""
-        instance_dir = self.instances_dir / instance_id
+        # Find the instance log directory in the workspace structure
+        instance_dir = None
         
-        if not instance_dir.exists():
-            return f"❌ Instance {instance_id} not found"
+        # Look in all workspace directories for this instance (logs directly in workspace)
+        workspaces_dir = self.session_dir / "workspaces"
+        if workspaces_dir.exists():
+            for workspace_dir in workspaces_dir.iterdir():
+                if workspace_dir.is_dir():
+                    # Check if logs exist directly in this workspace
+                    if (workspace_dir / "status.json").exists():
+                        instance_dir = workspace_dir
+                        break
+        
+        # Fallback to old supervisor-managed instances directory
+        if instance_dir is None:
+            fallback_dir = self.session_dir / "instances" / instance_id
+            if fallback_dir.exists():
+                instance_dir = fallback_dir
+        
+        if instance_dir is None or not instance_dir.exists():
+            return f"❌ Instance {instance_id} not found in any workspace"
         
         try:
             if format_type == "openai_json":
@@ -318,7 +332,7 @@ class SupervisorOrchestrator:
         
         # Initialize components
         self.instance_manager = InstanceManager(session_dir, codex_binary)
-        self.log_reader = LogReader(session_dir / "instances")
+        self.log_reader = LogReader(session_dir)
         self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir)
         
         # Initialize context manager
@@ -719,18 +733,11 @@ class SupervisorOrchestrator:
             message = response.choices[0].message
             content = message.content or ""
             
-            # Add assistant message to conversation
-            if content.strip():
-                self.conversation_history.append({
-                    "role": "assistant",
-                    "content": content
-                })
-            
-            # Handle tool calls
+            # Handle tool calls first
             session_finished = False
+            tool_calls_data = []
+            
             if message.tool_calls:
-                tool_calls_data = []
-                
                 for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
                     try:
@@ -761,21 +768,26 @@ class SupervisorOrchestrator:
                         "tool_call_id": tool_call.id,
                         "content": tool_result
                     })
-                
-                # Add tool calls to conversation (before the tool responses)
+            
+            # Add single assistant message (with or without tool calls)
+            if content.strip() or tool_calls_data:
+                assistant_message = {
+                    "role": "assistant",
+                    "content": content
+                }
                 if tool_calls_data:
-                    # Insert tool calls before the tool responses
+                    assistant_message["tool_calls"] = tool_calls_data
+                
+                # Insert assistant message before tool responses
+                if tool_calls_data:
+                    # Move tool responses to end and insert assistant message before them
                     tool_responses = self.conversation_history[-len(tool_calls_data):]
                     self.conversation_history = self.conversation_history[:-len(tool_calls_data)]
-                    
-                    self.conversation_history.append({
-                        "role": "assistant",
-                        "content": content,
-                        "tool_calls": tool_calls_data
-                    })
-                    
-                    # Add back the tool responses
+                    self.conversation_history.append(assistant_message)
                     self.conversation_history.extend(tool_responses)
+                else:
+                    # No tool calls, just add the assistant message
+                    self.conversation_history.append(assistant_message)
             
             return session_finished
             

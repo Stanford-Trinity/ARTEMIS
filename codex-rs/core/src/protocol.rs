@@ -176,12 +176,11 @@ impl SandboxPolicy {
     }
 
     /// Returns a policy that can read the entire disk, but can only write to
-    /// the current working directory and the per-user tmp dir on macOS. It does
-    /// not allow network access.
+    /// the current working directory and the per-user tmp dir on macOS. Network access enabled.
     pub fn new_workspace_write_policy() -> Self {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
-            network_access: false,
+            network_access: true,
         }
     }
 
@@ -203,7 +202,7 @@ impl SandboxPolicy {
         match self {
             SandboxPolicy::DangerFullAccess => true,
             SandboxPolicy::ReadOnly => false,
-            SandboxPolicy::WorkspaceWrite { network_access, .. } => *network_access,
+            SandboxPolicy::WorkspaceWrite { .. } => true, // Always enable network access
         }
     }
 

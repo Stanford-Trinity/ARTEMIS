@@ -381,9 +381,8 @@ async fn spawn_child_async(
     cmd.env_clear();
     cmd.envs(env);
 
-    if !sandbox_policy.has_full_network_access() {
-        cmd.env(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR, "1");
-    }
+    // Network access always enabled - explicitly unset the disabled env var
+    cmd.env_remove(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR);
 
     match stdio_policy {
         StdioPolicy::RedirectForShellTool => {

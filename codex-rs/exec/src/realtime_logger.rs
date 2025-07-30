@@ -13,18 +13,16 @@ pub struct RealtimeLogger {
     instance_id: String,
     conversation_log: Arc<Mutex<Vec<serde_json::Value>>>,
     context_file: Arc<Mutex<std::fs::File>>,
-    json_file: Arc<Mutex<std::fs::File>>,
     start_time: DateTime<Utc>,
 }
 
 impl RealtimeLogger {
     pub fn new(log_dir: PathBuf, instance_id: String, initial_prompt: &str) -> anyhow::Result<Self> {
-        // Create log directory
+        // Create log directory if it doesn't exist
         std::fs::create_dir_all(&log_dir)?;
         
-        // Create log files
+        // Create log files directly in the provided directory
         let context_path = log_dir.join("realtime_context.txt");
-        let json_path = log_dir.join("realtime_conversation.json");
         
         let context_file = Arc::new(Mutex::new(
             OpenOptions::new()
@@ -32,14 +30,6 @@ impl RealtimeLogger {
                 .write(true)
                 .truncate(true)
                 .open(&context_path)?
-        ));
-        
-        let json_file = Arc::new(Mutex::new(
-            OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&json_path)?
         ));
         
         let start_time = Utc::now();
@@ -71,7 +61,6 @@ impl RealtimeLogger {
             instance_id: instance_id.clone(),
             conversation_log: conversation_log.clone(),
             context_file,
-            json_file: json_file.clone(),
             start_time,
         };
         
@@ -125,6 +114,7 @@ impl RealtimeLogger {
             },
             
             EventMsg::ExecCommandEnd(result) => {
+                eprintln!("DEBUG: Processing ExecCommandEnd event with exit code {}", result.exit_code);
                 let status = if result.exit_code == 0 { "✅" } else { "❌" };
                 
                 // Add to conversation log
@@ -157,21 +147,16 @@ impl RealtimeLogger {
                 )).await?;
                 
                 if !result.stdout.is_empty() {
-                    let preview = if result.stdout.len() > 500 {
-                        format!("{}... (truncated)", &result.stdout[..500])
-                    } else {
-                        result.stdout.clone()
-                    };
-                    self.append_context(&format!("STDOUT: {}\n", preview)).await?;
+                    self.append_context(&format!("STDOUT: {}\n", result.stdout)).await?;
                 }
                 
                 if !result.stderr.is_empty() {
-                    let preview = if result.stderr.len() > 500 {
-                        format!("{}... (truncated)", &result.stderr[..500])
-                    } else {
-                        result.stderr.clone()
-                    };
-                    self.append_context(&format!("STDERR: {}\n", preview)).await?;
+                    self.append_context(&format!("STDERR: {}\n", result.stderr)).await?;
+                }
+                
+                // Also log if both are empty but we got a non-zero exit code
+                if result.stdout.is_empty() && result.stderr.is_empty() && result.exit_code != 0 {
+                    self.append_context(&format!("(No output, but command failed with exit code {})\n", result.exit_code)).await?;
                 }
             },
             
@@ -218,12 +203,27 @@ impl RealtimeLogger {
                     }));
                 }
                 
-                self.append_context(&format!(
-                    "[{}] TOOL RESULT {}: {}\n",
-                    timestamp.format("%H:%M:%S"),
-                    status,
-                    result.call_id
-                )).await?;
+                // Log the actual tool result content
+                match &result.result {
+                    Ok(output) => {
+                        self.append_context(&format!(
+                            "[{}] TOOL RESULT {}: {}\nOUTPUT: {:?}\n",
+                            timestamp.format("%H:%M:%S"),
+                            status,
+                            result.call_id,
+                            output
+                        )).await?;
+                    },
+                    Err(error) => {
+                        self.append_context(&format!(
+                            "[{}] TOOL RESULT {}: {}\nERROR: {:?}\n",
+                            timestamp.format("%H:%M:%S"),
+                            status,
+                            result.call_id,
+                            error
+                        )).await?;
+                    }
+                }
             },
             
             EventMsg::TaskComplete(_) => {
@@ -292,12 +292,75 @@ impl RealtimeLogger {
                 
             },
             
-            _ => {
-                // Log other events in a generic way (context only, not JSON)
+            EventMsg::TaskStarted => {
                 self.append_context(&format!(
-                    "[{}] EVENT: {:?}\n",
+                    "[{}] 🚀 TASK STARTED\n",
+                    timestamp.format("%H:%M:%S")
+                )).await?;
+            },
+            
+            EventMsg::SessionConfigured(_) => {
+                self.append_context(&format!(
+                    "[{}] ⚙️ SESSION CONFIGURED\n",
+                    timestamp.format("%H:%M:%S")
+                )).await?;
+            },
+            
+            EventMsg::ExecApprovalRequest(req) => {
+                self.append_context(&format!(
+                    "[{}] 🔐 APPROVAL REQUEST: {:?}\n",
                     timestamp.format("%H:%M:%S"),
-                    event.msg
+                    req.command
+                )).await?;
+            },
+            
+            EventMsg::ApplyPatchApprovalRequest(req) => {
+                let reason = req.reason.as_deref().unwrap_or("No reason");
+                self.append_context(&format!(
+                    "[{}] 📝 PATCH APPROVAL REQUEST: {}\n",
+                    timestamp.format("%H:%M:%S"),
+                    reason
+                )).await?;
+            },
+            
+            EventMsg::PatchApplyBegin(patch) => {
+                self.append_context(&format!(
+                    "[{}] 📝 APPLYING PATCH: call_id={}\n",
+                    timestamp.format("%H:%M:%S"),
+                    patch.call_id
+                )).await?;
+            },
+            
+            EventMsg::PatchApplyEnd(result) => {
+                let status = if result.success { "✅" } else { "❌" };
+                self.append_context(&format!(
+                    "[{}] PATCH RESULT {}: call_id={}\n",
+                    timestamp.format("%H:%M:%S"),
+                    status,
+                    result.call_id
+                )).await?;
+                
+                if !result.stdout.is_empty() {
+                    self.append_context(&format!("STDOUT: {}\n", result.stdout)).await?;
+                }
+                
+                if !result.stderr.is_empty() {
+                    self.append_context(&format!("STDERR: {}\n", result.stderr)).await?;
+                }
+            },
+            
+            EventMsg::BackgroundEvent(bg) => {
+                self.append_context(&format!(
+                    "[{}] 🔄 BACKGROUND: {}\n",
+                    timestamp.format("%H:%M:%S"),
+                    bg.message
+                )).await?;
+            },
+            
+            EventMsg::GetHistoryEntryResponse(_) => {
+                self.append_context(&format!(
+                    "[{}] 📜 HISTORY ENTRY RESPONSE\n",
+                    timestamp.format("%H:%M:%S")
                 )).await?;
             }
         }
@@ -306,6 +369,11 @@ impl RealtimeLogger {
     }
     
     async fn append_context(&self, text: &str) -> anyhow::Result<()> {
+        // Add debug logging to track what's being written
+        if text.contains("COMMAND RESULT") {
+            eprintln!("DEBUG: Writing command result: {}", text.trim());
+        }
+        
         let mut file = self.context_file.lock().await;
         file.write_all(text.as_bytes())?;
         file.flush()?;
