@@ -129,7 +129,7 @@ Output a concise summary that maintains all critical context for continuing the 
         original_tokens = self.count_tokens(messages)
         logging.info(f"🔄 Context too long ({original_tokens:,} tokens), summarizing...")
         
-        summary_content = await self._summarize_context(context_text)
+        summary_content = await self._get_summary(context_text)
         
         # Build new conversation history
         new_messages = []

@@ -177,8 +177,11 @@ class InstanceManager:
         if instance["status"] != "running":
             return False
         
-        instance_log_dir = instance["log_dir"]
-        followup_file = instance_log_dir / "followup_input.json"
+        # Codex looks for followup in its nested logs directory, same as status.json
+        workspace_dir = instance.get("workspace_dir", instance_id)
+        session_id = self.session_dir.name
+        actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
+        followup_file = actual_log_dir / "followup_input.json"
         
         followup_data = {
             "message": message,
