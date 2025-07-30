@@ -695,9 +695,10 @@ class SupervisorTools:
         if instance["status"] != "running":
             return f"❌ Instance {instance_id} is not running (status: {instance['status']})"
         
-        # The actual log directory where codex writes files (logs directly in workspace)
+        # The actual log directory where codex writes files (nested structure)
         workspace_dir = instance.get("workspace_dir", instance_id)
-        actual_log_dir = self.session_dir / "workspaces" / workspace_dir
+        session_id = self.session_dir.name  # Extract session_id from session_dir
+        actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
         status_file = actual_log_dir / "status.json"
         
         timeout_seconds = timeout_minutes * 60
