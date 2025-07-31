@@ -50,6 +50,7 @@ class SupervisorPrompt:
   - Set appropriate duration (30min for focused tests, 60min for broader assessments)
   - Create separate workspaces for different target systems
 - **AVOID**: Vague tasks like "find vulnerabilities" or "test the website"
+- **AUTHENTICATION**: The instance will be started on the current jumpbox, you do not need to instruct it to access it first.
 
 **`list_instances`** - Monitor your testing fleet:
 - **WHEN TO USE**: Regularly throughout session to track progress and resource usage
