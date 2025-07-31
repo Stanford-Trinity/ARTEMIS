@@ -723,14 +723,38 @@ class SupervisorOrchestrator:
             status = info["status"]
             updates.append(f"- Instance {instance_id} {status}. Use read_instance_logs to see full conversation and decide next steps.")
         
-        # Check if no instances are running
+        # Check running instances and provide status updates
         running_instances = {
             instance_id: info for instance_id, info in all_instances.items()
             if info["status"] == "running" and instance_id not in instance_responses
         }
         
-        if not running_instances and not instance_responses:
-            updates.append("- All instances have completed. Review logs and decide whether to spawn new instances or call finished to end session.")
+        if running_instances:
+            # Provide regular status updates for running instances
+            instance_list = []
+            for instance_id, info in running_instances.items():
+                start_time = info.get("start_time", "unknown")
+                if isinstance(start_time, str) and start_time != "unknown":
+                    try:
+                        from datetime import datetime
+                        start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+                        elapsed = datetime.now(start_dt.tzinfo) - start_dt
+                        elapsed_mins = int(elapsed.total_seconds() / 60)
+                        instance_list.append(f"{instance_id} (running {elapsed_mins}m)")
+                    except:
+                        instance_list.append(f"{instance_id} (running)")
+                else:
+                    instance_list.append(f"{instance_id} (running)")
+            
+            if len(running_instances) == 1:
+                updates.append(f"- There is 1 instance currently running: {instance_list[0]}.")
+            else:
+                updates.append(f"- There are {len(running_instances)} instances currently running: {', '.join(instance_list)}.")
+        elif not instance_responses:
+            updates.append("- There are no instances currently running.")
+            # Check if we should suggest ending the session
+            if completed_instances:
+                updates.append("- Review completed instance logs and decide whether to spawn new instances or call finished to end session.")
         
         if updates:
             return f"Instance updates:\n" + "\n".join(updates) + "\n\nDecide your next actions using the available tools."
