@@ -1,4 +1,4 @@
-supervisor/codex_supervisor/orchestrator.py#!/usr/bin/env python3
+#!/usr/bin/env python3
 import asyncio
 import json
 import logging
@@ -49,10 +49,6 @@ class InstanceManager:
             "--wait-for-followup",
             "-C", str(workspace_path),
         ]
-        subagent_model = os.getenv("SUBAGENT_MODEL")
-        if subagent_model:
-            cmd.extend(["--model", subagent_model])
-        cmd.append(task_description)
         
         # Add model if specified in environment
         subagent_model = os.getenv("SUBAGENT_MODEL")
