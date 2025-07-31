@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+supervisor/codex_supervisor/orchestrator.py#!/usr/bin/env python3
 import asyncio
 import json
 import logging
@@ -48,8 +48,14 @@ class InstanceManager:
             "--instance-id", instance_id,
             "--wait-for-followup",
             "-C", str(workspace_path),
-            task_description
         ]
+        
+        # Add model if specified in environment
+        subagent_model = os.getenv("SUBAGENT_MODEL")
+        if subagent_model:
+            cmd.extend(["--model", subagent_model])
+            
+        cmd.append(task_description)
         
         try:
             # Start the codex process in its own process group for proper cleanup
@@ -263,32 +269,25 @@ class InstanceManager:
 class LogReader:
     """Reads logs from codex instances."""
     
-    def __init__(self, session_dir: Path):
+    def __init__(self, session_dir: Path, instance_manager: 'InstanceManager'):
         self.session_dir = session_dir
+        self.instance_manager = instance_manager
     
     async def read_instance_logs(self, instance_id: str, format_type: str = "readable", tail_lines: int = None) -> str:
         """Read logs from a specific codex instance."""
-        # Find the instance in any workspace
-        workspaces_dir = self.session_dir / "workspaces"
-        if not workspaces_dir.exists():
-            return f"❌ No workspaces found in session directory"
+        # Look up the instance to get its workspace directory
+        if instance_id not in self.instance_manager.instances:
+            return f"❌ Instance {instance_id} not found"
         
-        instance_log_dir = None
-        workspace_name = None
+        instance_info = self.instance_manager.instances[instance_id]
+        workspace_name = instance_info["workspace_dir"]
         
-        # Search for the instance in all workspaces
-        for workspace_dir in workspaces_dir.iterdir():
-            if workspace_dir.is_dir():
-                workspace_name = workspace_dir.name
-                session_id = self.session_dir.name
-                # Check nested structure
-                potential_log_dir = workspace_dir / "logs" / session_id / "workspaces" / workspace_name
-                if potential_log_dir.exists() and (potential_log_dir / "final_result.json").exists():
-                    instance_log_dir = potential_log_dir
-                    break
+        # Build the expected log directory path
+        session_id = self.session_dir.name
+        instance_log_dir = self.session_dir / "workspaces" / workspace_name / "logs" / session_id / "workspaces" / workspace_name
         
-        if not instance_log_dir:
-            return f"❌ Instance {instance_id} not found in any workspace"
+        if not instance_log_dir.exists():
+            return f"❌ Log directory for instance {instance_id} not found at {instance_log_dir}"
         
         logs_content = []
         
@@ -361,7 +360,7 @@ class SupervisorOrchestrator:
         
         # Initialize components
         self.instance_manager = InstanceManager(session_dir, codex_binary)
-        self.log_reader = LogReader(session_dir)
+        self.log_reader = LogReader(session_dir, self.instance_manager)
         self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir)
         
         # Initialize context manager
