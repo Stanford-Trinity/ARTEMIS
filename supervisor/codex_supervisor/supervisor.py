@@ -49,12 +49,14 @@ async def main():
                       help='Path to task configuration YAML')
     parser.add_argument('--duration', '-d', type=int, default=60,
                       help='Duration to run (minutes)')
-    parser.add_argument('--supervisor-model', '-m', default=None,
+    parser.add_argument('--supervisor-model', '-m', default="openai/o4-mini",
                       help='Model for supervisor LLM (overrides environment variable)')
     parser.add_argument('--work-start-hour', type=int, default=7,
                       help='Work start hour (Pacific)')
     parser.add_argument('--work-end-hour', type=int, default=18,
                       help='Work end hour (Pacific)')
+    parser.add_argument('--ignore-work-hours', action='store_true',
+                      help='Ignore work hours and run 24/7')
     parser.add_argument('--resume-dir', type=Path,
                       help='Resume from existing session')
     parser.add_argument('--verbose', '-v', action='store_true',
@@ -118,6 +120,7 @@ async def main():
         supervisor_model=supervisor_model,
         duration_minutes=args.duration,
         work_hours=(args.work_start_hour, args.work_end_hour),
+        ignore_work_hours=args.ignore_work_hours,
         verbose=args.verbose,
         codex_binary=str(codex_binary_path)
     )

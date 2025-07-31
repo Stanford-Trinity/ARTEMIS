@@ -400,7 +400,9 @@ class SupervisorTools:
         success = await self.instance_manager.send_followup(instance_id, message)
         
         if success:
-            return f"✅ Sent followup to instance '{instance_id}': {message}"
+            # Give codex a moment to process the followup
+            await asyncio.sleep(3)
+            return f"✅ Sent followup to instance '{instance_id}': {message}. Waiting 3s for processing."
         else:
             return f"❌ Failed to send followup to instance '{instance_id}' (may not exist or not running)"
 
@@ -695,7 +697,7 @@ class SupervisorTools:
         if instance["status"] != "running":
             return f"❌ Instance {instance_id} is not running (status: {instance['status']})"
         
-        # The actual log directory where codex writes files (nested structure)
+        # The actual log directory where codex writes files (codex creates nested structure)
         workspace_dir = instance.get("workspace_dir", instance_id)
         session_id = self.session_dir.name  # Extract session_id from session_dir
         actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir

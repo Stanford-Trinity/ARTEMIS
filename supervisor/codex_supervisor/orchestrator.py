@@ -33,7 +33,9 @@ class InstanceManager:
             return False
         
         # Prepare workspace directory (simplified structure)
-        workspace_path = self.session_dir / "workspaces" / workspace_dir
+        # Extract basename to prevent nested paths when LLM passes full paths
+        workspace_name = Path(workspace_dir).name
+        workspace_path = self.session_dir / "workspaces" / workspace_name
         workspace_path.mkdir(parents=True, exist_ok=True)
         
         # Build codex command - logs go directly in workspace, no separate log dir
@@ -66,7 +68,7 @@ class InstanceManager:
             self.instances[instance_id] = {
                 "process": process,
                 "task": task_description,
-                "workspace_dir": workspace_dir,
+                "workspace_dir": workspace_name,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "duration_minutes": duration_minutes,
                 "log_dir": workspace_path,  # Logs go directly in workspace now
@@ -183,20 +185,42 @@ class InstanceManager:
         actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
         followup_file = actual_log_dir / "followup_input.json"
         
+        logging.info(f"🔧 Followup path details:")
+        logging.info(f"   workspace_dir: {workspace_dir}")
+        logging.info(f"   session_id: {session_id}")
+        logging.info(f"   actual_log_dir: {actual_log_dir}")
+        logging.info(f"   followup_file: {followup_file}")
+        
         followup_data = {
             "message": message,
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
         
         try:
+            # Ensure the directory exists
+            logging.info(f"🔧 Creating directory: {actual_log_dir}")
+            actual_log_dir.mkdir(parents=True, exist_ok=True)
+            
+            logging.info(f"🔧 Writing followup data: {json.dumps(followup_data, indent=2)}")
             async with aiofiles.open(followup_file, 'w') as f:
                 await f.write(json.dumps(followup_data, indent=2))
             
+            # Verify file was created
+            if followup_file.exists():
+                file_size = followup_file.stat().st_size
+                logging.info(f"✅ Followup file created successfully: {followup_file} ({file_size} bytes)")
+            else:
+                logging.error(f"❌ Followup file was NOT created: {followup_file}")
+                return False
+                
             logging.info(f"📨 Sent followup to instance {instance_id}: {message}")
             return True
             
         except Exception as e:
-            logging.error(f"Error sending followup to instance {instance_id}: {e}")
+            logging.error(f"💥 Error sending followup to instance {instance_id}: {e}")
+            logging.error(f"📁 Attempted path: {followup_file}")
+            import traceback
+            logging.error(f"📁 Full traceback: {traceback.format_exc()}")
             return False
     
     async def check_for_responses(self) -> Dict[str, str]:
@@ -235,87 +259,88 @@ class InstanceManager:
         return responses
 
 
+
 class LogReader:
     """Reads logs from codex instances."""
     
     def __init__(self, session_dir: Path):
         self.session_dir = session_dir
     
-    async def read_instance_logs(self, instance_id: str, format_type: str = "readable", 
-                               tail_lines: Optional[int] = None) -> str:
-        """Read logs from a specific instance."""
-        # Find the instance log directory in the workspace structure
-        instance_dir = None
-        
-        # Look in all workspace directories for this instance (logs directly in workspace)
+    async def read_instance_logs(self, instance_id: str, format_type: str = "readable", tail_lines: int = None) -> str:
+        """Read logs from a specific codex instance."""
+        # Find the instance in any workspace
         workspaces_dir = self.session_dir / "workspaces"
-        if workspaces_dir.exists():
-            for workspace_dir in workspaces_dir.iterdir():
-                if workspace_dir.is_dir():
-                    # Check if logs exist directly in this workspace
-                    if (workspace_dir / "status.json").exists():
-                        instance_dir = workspace_dir
-                        break
+        if not workspaces_dir.exists():
+            return f"❌ No workspaces found in session directory"
         
-        # Fallback to old supervisor-managed instances directory
-        if instance_dir is None:
-            fallback_dir = self.session_dir / "instances" / instance_id
-            if fallback_dir.exists():
-                instance_dir = fallback_dir
+        instance_log_dir = None
+        workspace_name = None
         
-        if instance_dir is None or not instance_dir.exists():
+        # Search for the instance in all workspaces
+        for workspace_dir in workspaces_dir.iterdir():
+            if workspace_dir.is_dir():
+                workspace_name = workspace_dir.name
+                session_id = self.session_dir.name
+                # Check nested structure
+                potential_log_dir = workspace_dir / "logs" / session_id / "workspaces" / workspace_name
+                if potential_log_dir.exists() and (potential_log_dir / "final_result.json").exists():
+                    instance_log_dir = potential_log_dir
+                    break
+        
+        if not instance_log_dir:
             return f"❌ Instance {instance_id} not found in any workspace"
         
-        try:
-            if format_type == "openai_json":
-                return await self._read_openai_format(instance_dir, tail_lines)
-            else:
-                return await self._read_readable_format(instance_dir, tail_lines)
-                
-        except Exception as e:
-            return f"❌ Error reading logs for {instance_id}: {e}"
-    
-    async def _read_openai_format(self, instance_dir: Path, tail_lines: Optional[int]) -> str:
-        """Read logs in OpenAI conversation format."""
-        final_result_file = instance_dir / "final_result.json"
-        
-        if not final_result_file.exists():
-            return "No conversation log found"
+        logs_content = []
         
         try:
-            async with aiofiles.open(final_result_file, 'r') as f:
-                content = await f.read()
-                final_result = json.loads(content)
+            # Read realtime context
+            context_file = instance_log_dir / "realtime_context.txt"
+            if context_file.exists():
+                async with aiofiles.open(context_file, 'r') as f:
+                    content = await f.read()
+                    if tail_lines:
+                        lines = content.split('\n')
+                        content = '\n'.join(lines[-tail_lines:])
+                    logs_content.append(f"=== Realtime Context ===\n{content}")
+            
+            # Read final result
+            final_result_file = instance_log_dir / "final_result.json"
+            if final_result_file.exists():
+                async with aiofiles.open(final_result_file, 'r') as f:
+                    final_result = json.loads(await f.read())
+                    
+                    if format_type == "json":
+                        logs_content.append(f"=== Final Result (JSON) ===\n{json.dumps(final_result, indent=2)}")
+                    else:
+                        # Extract conversation for readable format
+                        conversation = final_result.get("conversation", [])
+                        if conversation:
+                            formatted_conversation = []
+                            for msg in conversation:
+                                role = msg.get("role", "unknown")
+                                content = msg.get("content", "")
+                                if role == "user":
+                                    formatted_conversation.append(f"👤 USER: {content}")
+                                elif role == "assistant":
+                                    formatted_conversation.append(f"🤖 ASSISTANT: {content}")
+                            
+                            conversation_text = '\n\n'.join(formatted_conversation)
+                            if tail_lines:
+                                lines = conversation_text.split('\n')
+                                conversation_text = '\n'.join(lines[-tail_lines:])
+                            logs_content.append(f"=== Conversation ===\n{conversation_text}")
+                        
+                        # Add status info
+                        status = final_result.get("status", "unknown")
+                        logs_content.append(f"=== Status ===\nStatus: {status}")
+            
+            if not logs_content:
+                return f"📝 No readable logs found for instance {instance_id}"
                 
-                # Extract conversation array from final result
-                conversation = final_result.get("conversation", [])
-                
-                if tail_lines:
-                    conversation = conversation[-tail_lines:]
-                
-                return json.dumps(conversation, indent=2)
-                
+            return '\n\n' + '='*50 + '\n\n'.join(logs_content)
+            
         except Exception as e:
-            return f"Error reading JSON log: {e}"
-    
-    async def _read_readable_format(self, instance_dir: Path, tail_lines: Optional[int]) -> str:
-        """Read logs in human-readable format."""
-        context_file = instance_dir / "realtime_context.txt"
-        
-        if not context_file.exists():
-            return "No context log found"
-        
-        try:
-            async with aiofiles.open(context_file, 'r') as f:
-                lines = await f.readlines()
-                
-                if tail_lines:
-                    lines = lines[-tail_lines:]
-                
-                return ''.join(lines)
-                
-        except Exception as e:
-            return f"Error reading context log: {e}"
+            return f"❌ Error reading logs for instance {instance_id}: {e}"
 
 
 class SupervisorOrchestrator:
@@ -323,13 +348,14 @@ class SupervisorOrchestrator:
     
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, work_hours: Tuple[int, int] = (7, 18),
-                 verbose: bool = False, codex_binary: str = "./target/release/codex"):
+                 ignore_work_hours: bool = False, verbose: bool = False, codex_binary: str = "./target/release/codex"):
         
         self.config = config
         self.session_dir = session_dir
         self.supervisor_model = supervisor_model
         self.duration_minutes = duration_minutes
         self.work_hours = work_hours
+        self.ignore_work_hours = ignore_work_hours
         self.verbose = verbose
         self.codex_binary = codex_binary
         
@@ -341,7 +367,7 @@ class SupervisorOrchestrator:
         # Initialize context manager
         self.context_manager = ContextManager(
             max_tokens=200_000,
-            buffer_tokens=500,
+            buffer_tokens=15_000,  # Trigger at 185k tokens
             summarization_model="openai/o4-mini"
         )
         
@@ -397,8 +423,9 @@ class SupervisorOrchestrator:
                 iteration += 1
                 logging.info(f"🔄 Supervisor iteration {iteration}")
                 
-                # Check work hours and sleep if needed
-                await self._wait_for_work_hours()
+                # Check work hours and sleep if needed (unless ignored)
+                if not self.ignore_work_hours:
+                    await self._wait_for_work_hours()
                 
                 # Update heartbeat
                 await self._update_heartbeat(iteration, start_time)

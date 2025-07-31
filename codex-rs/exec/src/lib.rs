@@ -266,6 +266,18 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 match wait_for_supervisor_followup(log_dir, instance_id_str, message_index).await {
                     Ok(Some(followup)) => {
                         current_prompt = followup;
+                        
+                        // Update status to indicate we're processing the followup
+                        let status_file = log_dir.join("status.json");
+                        let status = serde_json::json!({
+                            "status": "processing",
+                            "instance_id": instance_id_str,
+                            "last_message_index": message_index,
+                            "timestamp": chrono::Utc::now().to_rfc3339()
+                        });
+                        let _ = std::fs::write(&status_file, serde_json::to_string_pretty(&status).unwrap_or_default());
+                        info!("Updated status to 'processing' after receiving followup");
+                        
                         continue; // Continue the loop with new prompt
                     }
                     Ok(None) => {

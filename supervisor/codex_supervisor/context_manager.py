@@ -14,7 +14,7 @@ import os
 class ContextManager:
     """Manages conversation context and token limits for the supervisor."""
     
-    def __init__(self, max_tokens: int = 200_000, buffer_tokens: int = 500, 
+    def __init__(self, max_tokens: int = 200_000, buffer_tokens: int = 15_000, 
                  summarization_model: str = "openai/o4-mini"):
         self.max_tokens = max_tokens
         self.buffer_tokens = buffer_tokens
@@ -27,9 +27,6 @@ class ContextManager:
         except KeyError:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         
-        # Load summarization prompt template from supervisor prompts directory
-        self.summarization_prompt_file = Path(__file__).parent / "prompts" / "summarization_prompt.txt"
-        self.summarization_prompt_template = self._load_summarization_template()
         
         # OpenRouter client for summarization
         self.client = AsyncOpenAI(
@@ -37,34 +34,7 @@ class ContextManager:
             api_key=os.getenv("OPENROUTER_API_KEY")
         )
         
-        logging.info(f"🧠 ContextManager initialized: {max_tokens:,} max tokens, {buffer_tokens} buffer")
-    
-    def _load_summarization_template(self) -> str:
-        """Load the existing summarization prompt template."""
-        try:
-            with open(self.summarization_prompt_file, 'r') as f:
-                return f.read()
-        except Exception as e:
-            logging.error(f"Failed to load summarization template from {self.summarization_prompt_file}: {e}")
-            # Fallback template if file not found
-            return """You are a context summarization expert. Your task is to create a concise summary of the provided conversation context that preserves all critical information while reducing verbosity.
-
-PRESERVE THESE ELEMENTS:
-- Current session state and objectives
-- Key decisions made
-- Important tool calls and their outcomes
-- Any errors, failures, or security issues encountered
-- Current iteration number and progress
-- Active configurations and settings
-
-Here is the context to summarize:
-<context>
-{context}
-</context>
-
-When you summarize, keep in mind that the summary is going to be provided to the supervisor. Focus on actionable information and current state.
-
-Output a concise summary that maintains all critical context for continuing the session effectively."""
+        logging.info(f"🧠 ContextManager initialized: {max_tokens:,} max tokens, {buffer_tokens:,} buffer (triggers at {max_tokens - buffer_tokens:,})")
     
     def count_tokens(self, messages: List[Dict[str, Any]]) -> int:
         """Count tokens in a list of messages."""
@@ -240,27 +210,6 @@ Output your summary in the following format exactly:
             # Fallback summary
             return f"## Session Summary\nPrevious conversation context has been truncated due to length. {len(context.split())} words of supervisor activity occurred before this point."
 
-    def truncate_text(self, text: str, max_tokens: int) -> str:
-        """Truncate text to fit within token limit."""
-        tokens = self.tokenizer.encode(text)
-        if len(tokens) <= max_tokens:
-            return text
-        
-        # Truncate and decode
-        truncated_tokens = tokens[:max_tokens]
-        truncated_text = self.tokenizer.decode(truncated_tokens)
-        
-        return f"{truncated_text}\n\n[... truncated due to length, {len(tokens) - max_tokens} tokens removed]"
-    
-    def truncate_command_output(self, output: str, max_lines: int = 20) -> str:
-        """Truncate command output to maximum number of lines."""
-        lines = output.split('\n')
-        if len(lines) <= max_lines:
-            return output
-        
-        truncated = '\n'.join(lines[:max_lines])
-        remaining = len(lines) - max_lines
-        return f"{truncated}\n\n[... {remaining} more lines truncated]"
     
     def get_context_stats(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Get context statistics for monitoring."""
