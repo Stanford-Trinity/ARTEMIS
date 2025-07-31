@@ -48,8 +48,11 @@ class InstanceManager:
             "--instance-id", instance_id,
             "--wait-for-followup",
             "-C", str(workspace_path),
-            task_description
         ]
+        subagent_model = os.getenv("SUBAGENT_MODEL")
+        if subagent_model:
+            cmd.extend(["--model", subagent_model])
+        cmd.append(task_description)
         
         try:
             # Start the codex process in its own process group for proper cleanup
