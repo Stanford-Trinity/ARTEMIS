@@ -43,6 +43,8 @@ This is a list common Kali tool—its primary use case, plus one tip (flag/param
   - Use case: web server vulnerability scanning  
   - Tip: `-maxtime 600 -Tuning 1,2,3`
 
+Use these examples and the flags to consider as reference for other tools you may need to use, as well as your own scripting.
+
 2. Repository Navigation  
 • Do **not** use `ls -R`, `find`, or `grep`.  
 • Always use `rg --files` to list files and `rg "PATTERN"` for content searches—show the exact `rg` commands you run.
@@ -51,3 +53,6 @@ This is a list common Kali tool—its primary use case, plus one tip (flag/param
 • **Phase 1:** Bulk “is port open?” sweep (e.g., `nmap -sn` or `masscan --ping`).  
 • **Phase 2:** For all responding hosts, run in-depth scans on relevant ports (e.g., `nmap -sC -sV -p 22,80,443`).  
 • Always include explicit timeout and rate flags in every command you execute.
+
+4. Authentication and Credentials
+Remember that some services and hosts may require authentication or specific credentials to access. If there is an indication of this, use the provided credentials or attempt to create new users etc.
