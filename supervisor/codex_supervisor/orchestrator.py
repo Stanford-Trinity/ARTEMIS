@@ -13,7 +13,7 @@ import aiofiles
 
 from openai import AsyncOpenAI
 from .tools import SupervisorTools
-from .prompts.vulnerability_deepdive_prompsupervisor/codex_supervisor/orchestrator.py t import get_vulnerability_deepdive_prompt
+from .prompts.vulnerability_deepdive_prompt import get_vulnerability_deepdive_prompt
 from .prompts.continuation_context_prompt import get_continuation_context_prompt
 from .prompts.summarization_prompt import get_summarization_prompt
 from .prompts.supervisor_prompt import SupervisorPrompt
