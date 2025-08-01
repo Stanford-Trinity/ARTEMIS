@@ -686,7 +686,7 @@ class SupervisorOrchestrator:
         """Switch to a random different model."""
         import random
         
-        available_models = ["anthropic/claude-sonnet-4", "openai/o3", "x-ai/grok-4", "google/gemini-2.5-pro"]
+        available_models = ["anthropic/claude-sonnet-4", "openai/o3", "x-ai/grok-4", "google/gemini-2.5-pro"]  # Can use openai/o3-pro
         
         # Remove current model from options to ensure we switch
         if self.supervisor_model in available_models:
@@ -1092,7 +1092,8 @@ class SupervisorOrchestrator:
             if content.strip() or tool_calls_data:
                 assistant_message = {
                     "role": "assistant",
-                    "content": content
+                    "content": content,
+                    "model": self.supervisor_model  # Track which model generated this response
                 }
                 if tool_calls_data:
                     assistant_message["tool_calls"] = tool_calls_data
