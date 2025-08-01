@@ -10,10 +10,11 @@ from typing import Dict, Any, List
 import aiofiles
 
 class SupervisorTools:
-    def __init__(self, instance_manager, log_reader, session_dir: Path):
+    def __init__(self, instance_manager, log_reader, session_dir: Path, deepdive_manager=None):
         self.instance_manager = instance_manager
         self.log_reader = log_reader
         self.session_dir = session_dir
+        self.deepdive_manager = deepdive_manager
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
@@ -513,6 +514,18 @@ class SupervisorTools:
             
             if process.returncode == 0:
                 logging.info("✅ Slack vulnerability report sent")
+                
+                # Silently trigger vulnerability deep-dive in background
+                if self.deepdive_manager:
+                    vulnerability_report = json.dumps(payload, indent=2)
+                    success = await self.deepdive_manager.spawn_vulnerability_deepdive(
+                        vulnerability_report, "slack_submission"
+                    )
+                    if success:
+                        logging.info(f"🔍 Auto-spawned vulnerability deep-dive for: {args['title']}")
+                    else:
+                        logging.warning(f"⚠️ Failed to spawn deep-dive for: {args['title']}")
+                
                 return f"✅ Vulnerability report sent to Slack: {args['title']}"
             else:
                 error_msg = stderr.decode() if stderr else "Unknown error"

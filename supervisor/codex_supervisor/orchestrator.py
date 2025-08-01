@@ -13,8 +13,109 @@ import aiofiles
 
 from openai import AsyncOpenAI
 from .tools import SupervisorTools
+from .prompts.vulnerability_deepdive_prompt import get_vulnerability_deepdive_prompt
 from .prompts.supervisor_prompt import SupervisorPrompt
 from .context_manager import ContextManager
+
+class VulnerabilityDeepDiveManager:
+    """Manages independent vulnerability deep-dive instances."""
+    
+    def __init__(self, session_dir: Path, codex_binary: str, task_config: dict):
+        self.session_dir = session_dir
+        self.codex_binary = codex_binary
+        self.task_config = task_config
+        self.deepdive_instances = {}  # Track deep-dive instances separately
+        
+        # Create deep-dive workspace directory
+        self.deepdive_dir = session_dir / "vulnerability_deepdives"
+        self.deepdive_dir.mkdir(exist_ok=True)
+        
+    async def spawn_vulnerability_deepdive(self, vulnerability_details: str, source_instance_id: str) -> bool:
+        """Spawn an independent deep-dive instance for a discovered vulnerability."""
+        import uuid
+        
+        # Generate unique ID for this deep-dive
+        deepdive_id = f"vuln_deepdive_{uuid.uuid4().hex[:8]}"
+        workspace_name = f"deepdive_{source_instance_id}_{uuid.uuid4().hex[:6]}"
+        
+        # Create workspace
+        workspace_path = self.deepdive_dir / workspace_name
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        
+        # Generate deep-dive prompt
+        deepdive_prompt = get_vulnerability_deepdive_prompt(vulnerability_details, self.task_config)
+        
+        # Build codex command
+        cmd = [
+            self.codex_binary,
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "--skip-git-repo-check",
+            "--log-session-dir", str(workspace_path),
+            "--instance-id", deepdive_id,
+            "--wait-for-followup",
+            "-C", str(workspace_path),
+        ]
+        
+        # Add model if specified
+        subagent_model = os.getenv("SUBAGENT_MODEL")
+        if subagent_model:
+            cmd.extend(["--model", subagent_model])
+            
+        cmd.append(deepdive_prompt)
+        
+        try:
+            # Start the process
+            env = os.environ.copy()
+            process = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=workspace_path,
+                env=env,
+                preexec_fn=os.setsid if hasattr(os, 'setsid') else None
+            )
+            
+            # Track the deep-dive instance
+            self.deepdive_instances[deepdive_id] = {
+                "process": process,
+                "workspace_name": workspace_name,
+                "source_instance": source_instance_id,
+                "vulnerability": vulnerability_details[:100] + "..." if len(vulnerability_details) > 100 else vulnerability_details,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "status": "running"
+            }
+            
+            logging.info(f"🔍 Spawned vulnerability deep-dive {deepdive_id} for source instance {source_instance_id}")
+            
+            # Start monitoring task (fire and forget)
+            asyncio.create_task(self._monitor_deepdive(deepdive_id))
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to spawn vulnerability deep-dive: {e}")
+            return False
+    
+    async def _monitor_deepdive(self, deepdive_id: str):
+        """Monitor a deep-dive instance until completion."""
+        instance = self.deepdive_instances[deepdive_id]
+        process = instance["process"]
+        
+        try:
+            # Wait for process completion (no timeout - let it finish naturally)
+            await process.wait()
+            
+            if process.returncode == 0:
+                instance["status"] = "completed"
+                logging.info(f"✅ Vulnerability deep-dive {deepdive_id} completed successfully")
+            else:
+                instance["status"] = "failed"
+                logging.warning(f"❌ Vulnerability deep-dive {deepdive_id} failed with exit code {process.returncode}")
+                
+        except Exception as e:
+            logging.error(f"💥 Error monitoring deep-dive {deepdive_id}: {e}")
+            instance["status"] = "error"
 
 
 class InstanceManager:
@@ -361,7 +462,12 @@ class SupervisorOrchestrator:
         # Initialize components
         self.instance_manager = InstanceManager(session_dir, codex_binary)
         self.log_reader = LogReader(session_dir, self.instance_manager)
-        self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir)
+        
+        # Initialize vulnerability deep-dive manager
+        self.deepdive_manager = VulnerabilityDeepDiveManager(session_dir, codex_binary, config)
+        
+        # Initialize tools with deepdive_manager
+        self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir, self.deepdive_manager)
         
         # Initialize context manager
         self.context_manager = ContextManager(
