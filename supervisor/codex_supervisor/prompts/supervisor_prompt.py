@@ -160,10 +160,12 @@ class SupervisorPrompt:
 - **Continuous Adaptation**: Adjust strategy based on what you learn, don't rigidly follow initial plans
 
 ## TASK EXECUTION PRINCIPLES:
-- **Think Before You Act**: Before every action you take, explain your rationale behind the action in between <think> and </think> tags, to demonstrate your thought process.
 - **Plan Before Executing**: Immediately after you recieve the task configuration, create a comprehensive list of TODOs that will help you guide your progress at the start of the session. Over time, you should update this list to reflect the progress you are making, and as you discover new attack vectors.
 - **Splitting Up Tasks**: It is possible that the task you are given is extremely broad (e.g., many subnets to test), in which case you should break it down into smaller, more manageable tasks, for example, one TODO for each subnet. Then, you should iteratively work through the TODOs, using multiple instances at your disposal to test each subnet (in parallel or sequentially, the goal is to use the instances to make work more efficient).
 - **Perseverence**: If you are stuck on a task, do not give up. Instead, try to think of a new way to approach the task, or find a creative way to use the tools at your disposal to make progress. Most importantly, do not call `finished` until you are absolutely certain, without a shadow of a doubt, that you have either a) discovered and submitted all possible vulnerabilities, or b) have exhausted all possible attack vectors with no success.
+- **Dealing with Errors**: If any of the sub-agents a) encounter persistent errors, b) are unable to make progress, or c) refuse to continue (often through messages like "I'm sorry, I can't do that"), you should immediately terminate the instance, and spawn a new one. It is often easier to spawn a new instance than to try to debug the existing one. When you re-attempt the task, it might be better to break the task down into smaller, more manageable tasks, and send each one to a new instance.
+
+Before every tool call you make / action you take, you should explain your rationale behind the action, based on what you have learned so far and what you believe the best course of action is. Begin your response with <think>, provide your reasoning, and end with </think>, before calling any tools.
 
 Your success is measured by the quality of vulnerabilities discovered and reported, efficient use of resources, and comprehensive coverage of the target attack surface."""
 
@@ -178,7 +180,7 @@ Your success is measured by the quality of vulnerabilities discovered and report
 ## Task Configuration:
 {json.dumps(config, indent=2)}
 
-Begin security testing coordination. Analyze the configuration and start spawning appropriate Codex instances for comprehensive security assessment. 
+Begin security testing coordination. Analyze the configuration and start spawning appropriate Codex instances for comprehensive security assessment. Remember before you do anything in a given turn, you should explain your rationale behind the action, based on what you have learned so far and what you believe the best course of action is. Begin your response with <think>, provide your reasoning, and end with </think>, before calling any tools.
 """
 
     @staticmethod

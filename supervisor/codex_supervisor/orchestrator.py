@@ -13,7 +13,9 @@ import aiofiles
 
 from openai import AsyncOpenAI
 from .tools import SupervisorTools
-from .prompts.vulnerability_deepdive_prompt import get_vulnerability_deepdive_prompt
+from .prompts.vulnerability_deepdive_prompsupervisor/codex_supervisor/orchestrator.py t import get_vulnerability_deepdive_prompt
+from .prompts.continuation_context_prompt import get_continuation_context_prompt
+from .prompts.summarization_prompt import get_summarization_prompt
 from .prompts.supervisor_prompt import SupervisorPrompt
 from .context_manager import ContextManager
 
@@ -476,6 +478,9 @@ class SupervisorOrchestrator:
             summarization_model="openai/o4-mini"
         )
         
+        # Track continuation attempts
+        self.continuation_count = 0
+        
         # OpenRouter client (OpenAI-compatible API)
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
@@ -551,6 +556,14 @@ class SupervisorOrchestrator:
                 
                 # Check if supervisor called finished
                 if session_finished:
+                    # Check if we still have time remaining for continuation
+                    time_remaining = end_time - datetime.now(timezone.utc)
+                    if time_remaining.total_seconds() > 300:  # At least 5 minutes remaining
+                        logging.info(f"🔄 Supervisor called finished but {time_remaining.total_seconds()/60:.1f} minutes remain - attempting continuation")
+                        continuation_success = await self._attempt_continuation(start_time, end_time)
+                        if continuation_success:
+                            continue  # Continue the loop with fresh model/conversation
+                    
                     logging.info("✅ Supervisor completed session")
                     break
                 
@@ -566,6 +579,153 @@ class SupervisorOrchestrator:
         
         logging.info("✅ Supervisor loop completed")
         await self.shutdown()
+    
+    async def _attempt_continuation(self, start_time: datetime, end_time: datetime) -> bool:
+        """Attempt to continue session with fresh model and summarized context."""
+        try:
+            self.continuation_count += 1
+            logging.info(f"🔄 Starting continuation attempt #{self.continuation_count}")
+            
+            # Create continuation summary
+            summary = await self._create_continuation_summary()
+            
+            # Switch to a random different model
+            await self._switch_to_random_model()
+            
+            # Reset conversation with fresh context
+            await self._reset_conversation_for_continuation(summary, start_time, end_time)
+            
+            logging.info(f"✅ Successfully initialized continuation #{self.continuation_count} with model {self.supervisor_model}")
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to initialize continuation: {e}")
+            return False
+    
+    async def _create_continuation_summary(self) -> str:
+        """Create a summary for continuation by truncating and summarizing conversation content."""
+        # Extract all messages after the first user message (skip system + initial task)
+        if len(self.conversation_history) <= 2:
+            return "No significant conversation history to summarize."
+        
+        # Get conversation content (everything after system + initial user message)
+        conversation_content = self.conversation_history[2:]  # Skip system + initial user
+        
+        # Truncate to fit within token limits (185k)
+        truncated_content = await self._truncate_to_token_limit(conversation_content)
+        
+        # Create summary of the conversation content
+        summary_content = await self._summarize_conversation_content(truncated_content)
+        
+        return summary_content
+    
+    async def _truncate_to_token_limit(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Truncate messages to fit within 185k token limit, removing older messages first."""
+        max_tokens = 185_000
+        
+        # Start from the end and work backwards, keeping as much recent content as possible
+        truncated = []
+        current_tokens = 0
+        
+        for message in reversed(messages):
+            message_tokens = self.context_manager.count_tokens([message])
+            
+            if current_tokens + message_tokens <= max_tokens:
+                truncated.insert(0, message)  # Insert at beginning to maintain order
+                current_tokens += message_tokens
+            else:
+                # We've hit the limit, stop adding older messages
+                break
+        
+        if len(truncated) < len(messages):
+            logging.info(f"Truncated conversation: kept {len(truncated)}/{len(messages)} messages ({current_tokens:,} tokens)")
+        
+        return truncated
+    
+    async def _summarize_conversation_content(self, messages: List[Dict[str, Any]]) -> str:
+        """Summarize the conversation content for continuation."""
+        if not messages:
+            return "No conversation content to summarize."
+        
+        # Format messages for summarization
+        formatted_content = self.context_manager._format_messages_for_summary(messages)
+        
+        # Create summary prompt using unified template
+        summary_prompt = get_summarization_prompt(formatted_content)
+
+        try:
+            response = await self.context_manager.client.chat.completions.create(
+                model=self.context_manager.summarization_model,
+                messages=[{"role": "user", "content": summary_prompt}],
+                max_tokens=2000,
+                temperature=0.1
+            )
+            
+            return response.choices[0].message.content or "Summary generation failed"
+            
+        except Exception as e:
+            logging.error(f"Failed to generate continuation summary: {e}")
+            return "Error generating summary - proceeding with basic context."
+    
+    async def _load_vulnerabilities_log(self) -> str:
+        """Load the vulnerabilities log file content."""
+        vuln_log_file = self.session_dir / "vulnerabilities_found.log"
+        
+        if not vuln_log_file.exists():
+            return "No vulnerabilities have been submitted to Slack yet."
+        
+        try:
+            async with aiofiles.open(vuln_log_file, 'r') as f:
+                content = await f.read()
+                return content.strip() if content.strip() else "No vulnerabilities have been submitted to Slack yet."
+        except Exception as e:
+            logging.error(f"Error reading vulnerabilities log: {e}")
+            return "Error loading vulnerability log."
+    
+    async def _switch_to_random_model(self) -> None:
+        """Switch to a random different model."""
+        import random
+        
+        available_models = ["openai/o4-mini", "anthropic/claude-3.5-sonnet", "openai/gpt-4o", "o3"]
+        
+        # Remove current model from options to ensure we switch
+        if self.supervisor_model in available_models:
+            available_models.remove(self.supervisor_model)
+        
+        new_model = random.choice(available_models)
+        old_model = self.supervisor_model
+        self.supervisor_model = new_model
+        
+        logging.info(f"🔄 Switched supervisor model: {old_model} → {new_model}")
+    
+    async def _reset_conversation_for_continuation(self, summary: str, start_time: datetime, end_time: datetime) -> None:
+        """Reset conversation history with continuation context."""
+        # Clear conversation and start fresh
+        self.conversation_history = []
+        
+        # Add system prompt
+        self.conversation_history.append({
+            "role": "system",
+            "content": self.prompt.get_system_prompt()
+        })
+        
+        # Load vulnerabilities found so far
+        vulnerabilities_content = await self._load_vulnerabilities_log()
+        
+        # Create continuation context using external template
+        time_remaining = end_time - datetime.now(timezone.utc)
+        initial_context = self.prompt.format_initial_context(
+            self.config, self.duration_minutes, str(self.session_dir)
+        )
+        
+        continuation_context = get_continuation_context_prompt(
+            initial_context, summary, vulnerabilities_content, time_remaining.total_seconds()/60
+        )
+
+        self.conversation_history.append({
+            "role": "user",
+            "content": continuation_context
+        })
     
     async def _wait_for_work_hours(self):
         """Sleep until within work hours if currently outside."""

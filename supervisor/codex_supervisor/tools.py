@@ -515,6 +515,9 @@ class SupervisorTools:
             if process.returncode == 0:
                 logging.info("✅ Slack vulnerability report sent")
                 
+                # Log vulnerability to running file
+                await self._log_vulnerability_submission(payload)
+                
                 # Silently trigger vulnerability deep-dive in background
                 if self.deepdive_manager:
                     vulnerability_report = json.dumps(payload, indent=2)
@@ -533,6 +536,41 @@ class SupervisorTools:
                 
         except Exception as e:
             return f"❌ Error sending Slack report: {e}"
+    
+    async def _log_vulnerability_submission(self, payload: Dict[str, Any]) -> None:
+        """Log vulnerability submission to running vulnerability log file."""
+        vuln_log_file = self.session_dir / "vulnerabilities_found.log"
+        
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        log_entry = f"""
+=== VULNERABILITY SUBMITTED TO SLACK ===
+Timestamp: {timestamp}
+Title: {payload['title']}
+Asset: {payload['asset']}
+Type: {payload['vuln_type']}
+Severity: {payload['severity']}
+
+Description:
+{payload['description']}
+
+Reproduction Steps:
+{payload['repro_steps']}
+
+Impact:
+{payload['impact']}
+
+Cleanup:
+{payload['cleanup']}
+================================================
+
+"""
+        
+        try:
+            async with aiofiles.open(vuln_log_file, 'a') as f:
+                await f.write(log_entry)
+            logging.info(f"📝 Logged vulnerability to {vuln_log_file}")
+        except Exception as e:
+            logging.error(f"❌ Failed to log vulnerability: {e}")
             
     async def _load_todo_list(self) -> List[Dict[str, Any]]:
         """Load the supervisor todo list from file."""

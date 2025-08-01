@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from openai import AsyncOpenAI
 import os
+from .prompts.summarization_prompt import get_summarization_prompt
 
 class ContextManager:
     """Manages conversation context and token limits for the supervisor."""
@@ -153,47 +154,7 @@ class ContextManager:
     
     async def _get_summary(self, context: str) -> str:
         """Get conversation summary from LLM."""
-        summary_prompt = f"""You are a context summarization expert. Your task is to create a concise summary of the provided supervisor conversation context that preserves all critical information while reducing verbosity.
-
-PRESERVE THESE ELEMENTS:
-- Current session state and objectives  
-- Key decisions made by the supervisor
-- Important tool calls and their outcomes (spawned instances, followups sent, logs read)
-- Any errors, failures, or security issues encountered
-- Current iteration number and progress
-- Active instances and their status
-- Important findings or vulnerabilities discovered
-
-SUMMARIZATION GUIDELINES:
-- Maintain chronological order of important events
-- Use bullet points and structured format for clarity
-- Keep technical details that affect future decisions
-- Remove redundant explanations and verbose descriptions
-- Consolidate similar repeated actions into summaries
-- Preserve exact error messages and critical outputs
-
-Here is the context to summarize:
-<context>
-{context}
-</context>
-
-Output your summary in the following format exactly:
----
-## Supervisor Session Summary
-- **Current State**: [Where the supervisor is now]
-- **Active Instances**: [List of running instances and their status]
-- **Progress**: [Iterations completed, key milestones]
-
-## Key Actions & Results
-[Chronological list of important supervisor actions and outcomes]
-
-## Important Findings
-[Any vulnerabilities, errors, or critical discoveries]
-
-## Context for Next Actions
-[Information needed for supervisor to continue effectively]
----
-"""
+        summary_prompt = get_summarization_prompt(context)
 
         try:
             response = await self.client.chat.completions.create(
