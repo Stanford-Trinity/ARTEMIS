@@ -99,7 +99,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
-        model,
+        model: model.clone(),
         config_profile,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
@@ -153,7 +153,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         let instance_id_str = instance_id.clone().unwrap_or_else(|| {
             format!("codex_{}", std::process::id())
         });
-        Some(Arc::new(RealtimeLogger::new(log_dir.clone(), instance_id_str, &prompt)?))
+        Some(Arc::new(RealtimeLogger::new(log_dir.clone(), instance_id_str, &prompt, model.clone())?))
     } else {
         None
     };
@@ -263,18 +263,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         if wait_for_followup && assistant_responded {
             if let Some(ref log_dir) = log_session_dir {
                 let instance_id_str = instance_id.as_ref().map(|s| s.as_str()).unwrap_or("unknown");
-                match wait_for_supervisor_followup(log_dir, instance_id_str, message_index).await {
+                match wait_for_supervisor_followup(log_dir, instance_id_str, message_index, model.as_deref()).await {
                     Ok(Some(followup)) => {
                         current_prompt = followup;
                         
                         // Update status to indicate we're processing the followup
                         let status_file = log_dir.join("status.json");
-                        let status = serde_json::json!({
+                        let mut status_obj = serde_json::json!({
                             "status": "processing",
                             "instance_id": instance_id_str,
                             "last_message_index": message_index,
                             "timestamp": chrono::Utc::now().to_rfc3339()
                         });
+                        
+                        // Add model information if available
+                        if let Some(ref model_name) = model {
+                            status_obj["model"] = serde_json::Value::String(model_name.to_string());
+                        }
+                        
+                        let status = status_obj;
                         let _ = std::fs::write(&status_file, serde_json::to_string_pretty(&status).unwrap_or_default());
                         info!("Updated status to 'processing' after receiving followup");
                         
@@ -323,7 +330,8 @@ fn handle_last_message(
 async fn wait_for_supervisor_followup(
     log_dir: &std::path::Path,
     instance_id: &str, 
-    message_index: usize
+    message_index: usize,
+    model: Option<&str>
 ) -> anyhow::Result<Option<String>> {
     use tokio::time::{sleep, Duration};
     use std::fs;
@@ -333,12 +341,19 @@ async fn wait_for_supervisor_followup(
     let followup_file = log_dir.join("followup_input.json");
     
     // Write status to indicate we're waiting for followup
-    let status = serde_json::json!({
+    let mut status_obj = serde_json::json!({
         "status": "waiting_for_followup",
         "instance_id": instance_id,
         "last_message_index": message_index,
         "timestamp": Utc::now().to_rfc3339()
     });
+    
+    // Add model information if available
+    if let Some(model_name) = model {
+        status_obj["model"] = serde_json::Value::String(model_name.to_string());
+    }
+    
+    let status = status_obj;
     
     fs::write(&status_file, serde_json::to_string_pretty(&status)?)?;
     info!("Waiting for supervisor followup...");

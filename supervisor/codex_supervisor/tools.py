@@ -989,13 +989,34 @@ Cleanup:
             if not matches:
                 return f"No matches found for query: {query}"
             
-            # Format results
-            result_lines = [f"Found {len(matches)} matches for: {query}", ""]
+            # Limit results to prevent token overflow - use context manager's tokenizer
+            max_tokens = 10000  # Token limit for search results
+            current_tokens = 0
             
+            result_lines = [f"Found {len(matches)} matches for: {query}", ""]
+            current_tokens += len(self.context_manager.tokenizer.encode(result_lines[0]))
+            
+            included_matches = 0
             for match in matches:
-                result_lines.append(f"📁 {match['file']} (iteration {match['iteration']}, line {match['line_number']}):")
-                result_lines.append(match["context"])
-                result_lines.append("")  # Empty line between matches
+                header = f"📁 {match['file']} (iteration {match['iteration']}, line {match['line_number']}):"
+                context = match["context"]
+                
+                # Calculate tokens for this match
+                match_text = f"{header}\n{context}\n"
+                match_tokens = len(self.context_manager.tokenizer.encode(match_text))
+                
+                # Stop if adding this match would exceed our token budget
+                if current_tokens + match_tokens > max_tokens:
+                    break
+                
+                result_lines.append(header)
+                result_lines.append(context)
+                result_lines.append("")
+                current_tokens += match_tokens
+                included_matches += 1
+            
+            if included_matches < len(matches):
+                result_lines.append(f"... and {len(matches) - included_matches} more matches (truncated to stay within token limit)")
             
             return "\n".join(result_lines)
             

@@ -11,13 +11,14 @@ use chrono::{DateTime, Utc};
 pub struct RealtimeLogger {
     log_dir: PathBuf,
     instance_id: String,
+    model: Option<String>,
     conversation_log: Arc<Mutex<Vec<serde_json::Value>>>,
     context_file: Arc<Mutex<std::fs::File>>,
     start_time: DateTime<Utc>,
 }
 
 impl RealtimeLogger {
-    pub fn new(log_dir: PathBuf, instance_id: String, initial_prompt: &str) -> anyhow::Result<Self> {
+    pub fn new(log_dir: PathBuf, instance_id: String, initial_prompt: &str, model: Option<String>) -> anyhow::Result<Self> {
         // Create log directory if it doesn't exist
         std::fs::create_dir_all(&log_dir)?;
         
@@ -45,7 +46,7 @@ impl RealtimeLogger {
         
         // Write initial context synchronously before creating logger
         {
-            let mut file = context_file.clone();
+            let file = context_file.clone();
             let mut guard = file.try_lock().unwrap();
             guard.write_all(format!(
                 "=== CODEX INSTANCE: {} ===\nStarted: {}\nTask: {}\n\n",
@@ -59,6 +60,7 @@ impl RealtimeLogger {
         let logger = Self {
             log_dir,
             instance_id: instance_id.clone(),
+            model,
             conversation_log: conversation_log.clone(),
             context_file,
             start_time,
@@ -381,13 +383,18 @@ impl RealtimeLogger {
     }
     
     async fn save_final_result(&self, status: &str) -> anyhow::Result<()> {
-        let final_result = serde_json::json!({
+        let mut final_result = serde_json::json!({
             "instance_id": self.instance_id,
             "status": status,
             "started_at": self.start_time.to_rfc3339(),
             "completed_at": Utc::now().to_rfc3339(),
             "conversation": *self.conversation_log.lock().await
         });
+        
+        // Add model information if available
+        if let Some(ref model_name) = self.model {
+            final_result["model"] = serde_json::Value::String(model_name.clone());
+        }
         
         let result_path = self.log_dir.join("final_result.json");
         tokio::fs::write(&result_path, serde_json::to_string_pretty(&final_result)?).await?;
