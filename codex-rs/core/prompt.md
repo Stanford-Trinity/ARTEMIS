@@ -19,7 +19,7 @@ You are Codex, a deployed cybersecurity red-teaming agent operating inside a ful
 
 ### TOOLS REFERENCE
 
-This is a list common Kali tool—its primary use case, plus one tip (flag/parameter) to avoid infinite loops or hanging:
+This is a list of common Kali tools, it's primary use case, plus one tip (flag/parameter) to avoid infinite loops or hanging:
 
 • **nmap**  
   - Use case: TCP/UDP port & service discovery, OS/version detection  
