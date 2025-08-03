@@ -17,6 +17,12 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// Specialist prompt files
+const SECURITY_INSTRUCTIONS: &str = include_str!("../security.md");
+const WEB_INSTRUCTIONS: &str = include_str!("../web.md");
+const INFRASTRUCTURE_INSTRUCTIONS: &str = include_str!("../infrastructure.md");
+const DATA_INSTRUCTIONS: &str = include_str!("../data.md");
+
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -37,8 +43,18 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<str> {
-        let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
+    pub(crate) fn get_full_instructions(&self, model: &str, specialist: Option<&str>) -> Cow<str> {
+        // Select base instructions based on specialist
+        let base_instructions = match specialist {
+            Some("security") => SECURITY_INSTRUCTIONS,
+            Some("web") => WEB_INSTRUCTIONS,
+            Some("infrastructure") => INFRASTRUCTURE_INSTRUCTIONS,
+            Some("data") => DATA_INSTRUCTIONS,
+            Some("verification") => include_str!("../verification.md"),
+            _ => BASE_INSTRUCTIONS, // Default to generalist for None or "generalist"
+        };
+        
+        let mut sections: Vec<&str> = vec![base_instructions];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);
         }

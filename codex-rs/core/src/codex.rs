@@ -590,6 +590,7 @@ async fn submission_loop(
                     provider.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
+                    config.specialist.clone(),
                 );
 
                 // abort any current running session and clone its state

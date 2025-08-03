@@ -10,11 +10,12 @@ from typing import Dict, Any, List
 import aiofiles
 
 class SupervisorTools:
-    def __init__(self, instance_manager, log_reader, session_dir: Path, deepdive_manager=None):
+    def __init__(self, instance_manager, log_reader, session_dir: Path, deepdive_manager=None, context_manager=None):
         self.instance_manager = instance_manager
         self.log_reader = log_reader
         self.session_dir = session_dir
         self.deepdive_manager = deepdive_manager
+        self.context_manager = context_manager
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
@@ -373,12 +374,18 @@ class SupervisorTools:
         workspace_dir = args.get("workspace_dir", instance_id)
         duration_minutes = args.get("duration_minutes", 60)
         
+        # Use router to select specialist instance
+        from codex_supervisor.orchestration.router import TaskRouter
+        router = TaskRouter()
+        routing_result = await router.route_task(task_description)
+        specialist = routing_result["specialist"]
+        
         success = await self.instance_manager.spawn_instance(
-            instance_id, task_description, workspace_dir, duration_minutes
+            instance_id, task_description, workspace_dir, duration_minutes, specialist
         )
         
         if success:
-            return f"✅ Spawned codex instance '{instance_id}' with task: {task_description}"
+            return f"✅ Spawned {specialist} specialist instance '{instance_id}' with task: {task_description}"
         else:
             return f"❌ Failed to spawn instance '{instance_id}'"
 

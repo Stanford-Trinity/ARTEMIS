@@ -62,6 +62,10 @@ pub struct Cli {
     #[arg(long = "wait-for-followup")]
     pub wait_for_followup: bool,
 
+    /// Mode/specialist to use for prompts.
+    #[arg(long = "mode", value_enum, default_value_t = Mode::Generalist)]
+    pub mode: Mode,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]
@@ -75,4 +79,29 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum Mode {
+    #[default]
+    Generalist,
+    Verification,
+    Security,
+    Web,
+    Infrastructure,
+    Data,
+}
+
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Mode::Generalist => write!(f, "generalist"),
+            Mode::Verification => write!(f, "verification"),
+            Mode::Security => write!(f, "security"),
+            Mode::Web => write!(f, "web"),
+            Mode::Infrastructure => write!(f, "infrastructure"),
+            Mode::Data => write!(f, "data"),
+        }
+    }
 }

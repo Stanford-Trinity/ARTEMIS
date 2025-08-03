@@ -155,7 +155,7 @@ class ContextManager:
     async def _get_summary(self, context: str) -> str:
         """Get conversation summary from LLM."""
         summary_prompt = get_summarization_prompt(context)
-
+        
         try:
             response = await self.client.chat.completions.create(
                 model=self.summarization_model,
@@ -167,7 +167,7 @@ class ContextManager:
             return response.choices[0].message.content or "Summary generation failed"
             
         except Exception as e:
-            logging.error(f"Failed to generate conversation summary: {e}")
+            logging.error(f"❌ ContextManager: Summarization failed: {type(e).__name__}: {e}")
             # Fallback summary
             return f"## Session Summary\nPrevious conversation context has been truncated due to length. {len(context.split())} words of supervisor activity occurred before this point."
 

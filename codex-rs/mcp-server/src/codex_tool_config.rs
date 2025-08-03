@@ -117,6 +117,7 @@ impl CodexToolCallParam {
             // facilitate configuring the sandbox policy.
             sandbox_policy: None,
             model_provider: None,
+            specialist: None,
             codex_linux_sandbox_exe,
         };
 

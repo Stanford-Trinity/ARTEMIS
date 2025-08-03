@@ -12,438 +12,15 @@ import psutil
 import aiofiles
 
 from openai import AsyncOpenAI
-from .tools import SupervisorTools
-from .prompts.vulnerability_deepdive_prompt import get_vulnerability_deepdive_prompt
-from .prompts.continuation_context_prompt import get_continuation_context_prompt
-from .prompts.summarization_prompt import get_summarization_prompt
-from .prompts.supervisor_prompt import SupervisorPrompt
-from .context_manager import ContextManager
+from ..tools import SupervisorTools
+from ..prompts.continuation_context_prompt import get_continuation_context_prompt
+from ..prompts.summarization_prompt import get_summarization_prompt
+from ..prompts.supervisor_prompt import SupervisorPrompt
+from ..context_manager import ContextManager
 
-class VulnerabilityDeepDiveManager:
-    """Manages independent vulnerability deep-dive instances."""
-    
-    def __init__(self, session_dir: Path, codex_binary: str, task_config: dict):
-        self.session_dir = session_dir
-        self.codex_binary = codex_binary
-        self.task_config = task_config
-        self.deepdive_instances = {}  # Track deep-dive instances separately
-        
-        # Create deep-dive workspace directory
-        self.deepdive_dir = session_dir / "vulnerability_deepdives"
-        self.deepdive_dir.mkdir(exist_ok=True)
-        
-    async def spawn_vulnerability_deepdive(self, vulnerability_details: str, source_instance_id: str) -> bool:
-        """Spawn an independent deep-dive instance for a discovered vulnerability."""
-        import uuid
-        
-        # Generate unique ID for this deep-dive
-        deepdive_id = f"vuln_deepdive_{uuid.uuid4().hex[:8]}"
-        workspace_name = f"deepdive_{source_instance_id}_{uuid.uuid4().hex[:6]}"
-        
-        # Create workspace
-        workspace_path = self.deepdive_dir / workspace_name
-        workspace_path.mkdir(parents=True, exist_ok=True)
-        
-        # Generate deep-dive prompt
-        deepdive_prompt = get_vulnerability_deepdive_prompt(vulnerability_details, self.task_config)
-        
-        # Build codex command
-        cmd = [
-            self.codex_binary,
-            "exec",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--skip-git-repo-check",
-            "--log-session-dir", str(workspace_path),
-            "--instance-id", deepdive_id,
-            "--wait-for-followup",
-            "-C", str(workspace_path),
-        ]
-        
-        # Add model if specified
-        subagent_model = os.getenv("SUBAGENT_MODEL")
-        if subagent_model:
-            cmd.extend(["--model", subagent_model])
-            
-        cmd.append(deepdive_prompt)
-        
-        try:
-            # Start the process
-            env = os.environ.copy()
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workspace_path,
-                env=env,
-                preexec_fn=os.setsid if hasattr(os, 'setsid') else None
-            )
-            
-            # Track the deep-dive instance
-            self.deepdive_instances[deepdive_id] = {
-                "process": process,
-                "workspace_name": workspace_name,
-                "source_instance": source_instance_id,
-                "vulnerability": vulnerability_details[:100] + "..." if len(vulnerability_details) > 100 else vulnerability_details,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "status": "running"
-            }
-            
-            logging.info(f"🔍 Spawned vulnerability deep-dive {deepdive_id} for source instance {source_instance_id}")
-            
-            # Start monitoring task (fire and forget)
-            asyncio.create_task(self._monitor_deepdive(deepdive_id))
-            
-            return True
-            
-        except Exception as e:
-            logging.error(f"❌ Failed to spawn vulnerability deep-dive: {e}")
-            return False
-    
-    async def _monitor_deepdive(self, deepdive_id: str):
-        """Monitor a deep-dive instance until completion."""
-        instance = self.deepdive_instances[deepdive_id]
-        process = instance["process"]
-        
-        try:
-            # Wait for process completion (no timeout - let it finish naturally)
-            await process.wait()
-            
-            if process.returncode == 0:
-                instance["status"] = "completed"
-                logging.info(f"✅ Vulnerability deep-dive {deepdive_id} completed successfully")
-            else:
-                instance["status"] = "failed"
-                logging.warning(f"❌ Vulnerability deep-dive {deepdive_id} failed with exit code {process.returncode}")
-                
-        except Exception as e:
-            logging.error(f"💥 Error monitoring deep-dive {deepdive_id}: {e}")
-            instance["status"] = "error"
-
-
-class InstanceManager:
-    """Manages codex instances spawned by the supervisor."""
-    
-    def __init__(self, session_dir: Path, codex_binary: str):
-        self.session_dir = session_dir
-        self.codex_binary = codex_binary
-        self.instances: Dict[str, Dict[str, Any]] = {}
-    
-    async def spawn_instance(self, instance_id: str, task_description: str, 
-                           workspace_dir: str, duration_minutes: int) -> bool:
-        """Spawn a new codex instance."""
-        if instance_id in self.instances:
-            logging.warning(f"Instance {instance_id} already exists")
-            return False
-        
-        # Prepare workspace directory (simplified structure)
-        # Extract basename to prevent nested paths when LLM passes full paths
-        workspace_name = Path(workspace_dir).name
-        workspace_path = self.session_dir / "workspaces" / workspace_name
-        workspace_path.mkdir(parents=True, exist_ok=True)
-        
-        # Build codex command - logs go directly in workspace, no separate log dir
-        cmd = [
-            self.codex_binary,
-            "exec",
-            "--dangerously-bypass-approvals-and-sandbox",
-            "--skip-git-repo-check",
-            "--log-session-dir", str(workspace_path),
-            "--instance-id", instance_id,
-            "--wait-for-followup",
-            "-C", str(workspace_path),
-        ]
-        
-        # Add model if specified in environment
-        subagent_model = os.getenv("SUBAGENT_MODEL")
-        if subagent_model:
-            cmd.extend(["--model", subagent_model])
-            
-        cmd.append(task_description)
-        
-        try:
-            # Start the codex process in its own process group for proper cleanup
-            # Pass through environment variables including API keys
-            env = os.environ.copy()
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                cwd=workspace_path,
-                env=env,
-                preexec_fn=os.setsid if hasattr(os, 'setsid') else None
-            )
-            
-            # Store instance info
-            self.instances[instance_id] = {
-                "process": process,
-                "task": task_description,
-                "workspace_dir": workspace_name,
-                "started_at": datetime.now(timezone.utc).isoformat(),
-                "duration_minutes": duration_minutes,
-                "log_dir": workspace_path,  # Logs go directly in workspace now
-                "status": "running"
-            }
-            
-            logging.info(f"🚀 Spawned codex instance {instance_id} (PID: {process.pid})")
-            
-            # Start monitoring task
-            asyncio.create_task(self._monitor_instance(instance_id))
-            
-            return True
-            
-        except Exception as e:
-            logging.error(f"Failed to spawn instance {instance_id}: {e}")
-            return False
-    
-    async def terminate_instance(self, instance_id: str) -> bool:
-        """Terminate a specific codex instance."""
-        if instance_id not in self.instances:
-            return False
-        
-        instance = self.instances[instance_id]
-        process = instance["process"]
-        
-        try:
-            # Force kill immediately - no graceful termination
-            if process.returncode is None:
-                logging.info(f"🛑 Force killing instance {instance_id} (PID: {process.pid})")
-                
-                try:
-                    if hasattr(os, 'killpg'):
-                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-                    else:
-                        process.kill()
-                except ProcessLookupError:
-                    # Process already dead
-                    pass
-                
-                # Brief wait for process to die
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    logging.warning(f"Process {instance_id} still alive after SIGKILL")
-            
-            instance["status"] = "terminated"
-            logging.info(f"✅ Terminated instance {instance_id}")
-            return True
-            
-        except Exception as e:
-            logging.error(f"Error terminating instance {instance_id}: {e}")
-            return False
-    
-    def get_active_instances(self) -> Dict[str, Dict[str, Any]]:
-        """Get all active instances with their status."""
-        active = {}
-        for instance_id, info in self.instances.items():
-            if info["status"] == "running":
-                # Update status based on process state
-                process = info["process"]
-                if process.returncode is not None:
-                    info["status"] = "completed" if process.returncode == 0 else "failed"
-                
-                active[instance_id] = {
-                    "task": info["task"],
-                    "started_at": info["started_at"],
-                    "status": info["status"],
-                    "workspace_dir": info["workspace_dir"]
-                }
-        
-        return active
-    
-    async def _monitor_instance(self, instance_id: str):
-        """Monitor an instance and update its status."""
-        instance = self.instances[instance_id]
-        process = instance["process"]
-        duration_minutes = instance["duration_minutes"]
-        
-        try:
-            # Wait for process completion or timeout
-            timeout_seconds = duration_minutes * 60
-            await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
-            
-            # Process completed naturally
-            if process.returncode == 0:
-                instance["status"] = "completed"
-                logging.info(f"✅ Instance {instance_id} completed successfully")
-            else:
-                instance["status"] = "failed"
-                logging.warning(f"❌ Instance {instance_id} failed with exit code {process.returncode}")
-                
-        except asyncio.TimeoutError:
-            # Instance exceeded time limit
-            logging.warning(f"⏰ Instance {instance_id} exceeded {duration_minutes}min limit, terminating")
-            await self.terminate_instance(instance_id)
-            instance["status"] = "timeout"
-        
-        except Exception as e:
-            logging.error(f"Error monitoring instance {instance_id}: {e}")
-            instance["status"] = "error"
-    
-    async def send_followup(self, instance_id: str, message: str) -> bool:
-        """Send a followup message to a running instance."""
-        if instance_id not in self.instances:
-            return False
-        
-        instance = self.instances[instance_id]
-        if instance["status"] != "running":
-            return False
-        
-        # Codex looks for followup in its nested logs directory, same as status.json
-        workspace_dir = instance.get("workspace_dir", instance_id)
-        session_id = self.session_dir.name
-        actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
-        followup_file = actual_log_dir / "followup_input.json"
-        
-        logging.info(f"🔧 Followup path details:")
-        logging.info(f"   workspace_dir: {workspace_dir}")
-        logging.info(f"   session_id: {session_id}")
-        logging.info(f"   actual_log_dir: {actual_log_dir}")
-        logging.info(f"   followup_file: {followup_file}")
-        
-        followup_data = {
-            "message": message,
-            "timestamp": datetime.now(timezone.utc).isoformat()
-        }
-        
-        try:
-            # Ensure the directory exists
-            logging.info(f"🔧 Creating directory: {actual_log_dir}")
-            actual_log_dir.mkdir(parents=True, exist_ok=True)
-            
-            logging.info(f"🔧 Writing followup data: {json.dumps(followup_data, indent=2)}")
-            async with aiofiles.open(followup_file, 'w') as f:
-                await f.write(json.dumps(followup_data, indent=2))
-            
-            # Verify file was created
-            if followup_file.exists():
-                file_size = followup_file.stat().st_size
-                logging.info(f"✅ Followup file created successfully: {followup_file} ({file_size} bytes)")
-            else:
-                logging.error(f"❌ Followup file was NOT created: {followup_file}")
-                return False
-                
-            logging.info(f"📨 Sent followup to instance {instance_id}: {message}")
-            return True
-            
-        except Exception as e:
-            logging.error(f"💥 Error sending followup to instance {instance_id}: {e}")
-            logging.error(f"📁 Attempted path: {followup_file}")
-            import traceback
-            logging.error(f"📁 Full traceback: {traceback.format_exc()}")
-            return False
-    
-    async def check_for_responses(self) -> Dict[str, str]:
-        """Check all instances for new responses waiting for followup."""
-        responses = {}
-        
-        for instance_id, instance in self.instances.items():
-            if instance["status"] != "running":
-                continue
-                
-            instance_log_dir = instance["log_dir"]
-            status_file = instance_log_dir / "status.json"
-            
-            try:
-                if status_file.exists():
-                    async with aiofiles.open(status_file, 'r') as f:
-                        status_data = json.loads(await f.read())
-                    
-                    if status_data.get("status") == "waiting_for_followup":
-                        # Read the latest conversation to get the response
-                        final_result_file = instance_log_dir / "final_result.json"
-                        if final_result_file.exists():
-                            async with aiofiles.open(final_result_file, 'r') as f:
-                                final_result = json.loads(await f.read())
-                            
-                            # Get the last assistant message from the conversation array
-                            conversation = final_result.get("conversation", [])
-                            for msg in reversed(conversation):
-                                if msg.get("role") == "assistant":
-                                    responses[instance_id] = msg.get("content", "")
-                                    break
-                                    
-            except Exception as e:
-                logging.error(f"Error checking response for instance {instance_id}: {e}")
-        
-        return responses
-
-
-
-class LogReader:
-    """Reads logs from codex instances."""
-    
-    def __init__(self, session_dir: Path, instance_manager: 'InstanceManager'):
-        self.session_dir = session_dir
-        self.instance_manager = instance_manager
-    
-    async def read_instance_logs(self, instance_id: str, format_type: str = "readable", tail_lines: int = None) -> str:
-        """Read logs from a specific codex instance."""
-        # Look up the instance to get its workspace directory
-        if instance_id not in self.instance_manager.instances:
-            return f"❌ Instance {instance_id} not found"
-        
-        instance_info = self.instance_manager.instances[instance_id]
-        workspace_name = instance_info["workspace_dir"]
-        
-        # Build the expected log directory path
-        session_id = self.session_dir.name
-        instance_log_dir = self.session_dir / "workspaces" / workspace_name / "logs" / session_id / "workspaces" / workspace_name
-        
-        if not instance_log_dir.exists():
-            return f"❌ Log directory for instance {instance_id} not found at {instance_log_dir}"
-        
-        logs_content = []
-        
-        try:
-            # Read realtime context
-            context_file = instance_log_dir / "realtime_context.txt"
-            if context_file.exists():
-                async with aiofiles.open(context_file, 'r') as f:
-                    content = await f.read()
-                    if tail_lines:
-                        lines = content.split('\n')
-                        content = '\n'.join(lines[-tail_lines:])
-                    logs_content.append(f"=== Realtime Context ===\n{content}")
-            
-            # Read final result
-            final_result_file = instance_log_dir / "final_result.json"
-            if final_result_file.exists():
-                async with aiofiles.open(final_result_file, 'r') as f:
-                    final_result = json.loads(await f.read())
-                    
-                    if format_type == "json":
-                        logs_content.append(f"=== Final Result (JSON) ===\n{json.dumps(final_result, indent=2)}")
-                    else:
-                        # Extract conversation for readable format
-                        conversation = final_result.get("conversation", [])
-                        if conversation:
-                            formatted_conversation = []
-                            for msg in conversation:
-                                role = msg.get("role", "unknown")
-                                content = msg.get("content", "")
-                                if role == "user":
-                                    formatted_conversation.append(f"👤 USER: {content}")
-                                elif role == "assistant":
-                                    formatted_conversation.append(f"🤖 ASSISTANT: {content}")
-                            
-                            conversation_text = '\n\n'.join(formatted_conversation)
-                            if tail_lines:
-                                lines = conversation_text.split('\n')
-                                conversation_text = '\n'.join(lines[-tail_lines:])
-                            logs_content.append(f"=== Conversation ===\n{conversation_text}")
-                        
-                        # Add status info
-                        status = final_result.get("status", "unknown")
-                        logs_content.append(f"=== Status ===\nStatus: {status}")
-            
-            if not logs_content:
-                return f"📝 No readable logs found for instance {instance_id}"
-                
-            return '\n\n' + '='*50 + '\n\n'.join(logs_content)
-            
-        except Exception as e:
-            return f"❌ Error reading logs for instance {instance_id}: {e}"
-
+from .vulnerability_deepdive_manager import VulnerabilityDeepDiveManager
+from .instance_manager import InstanceManager
+from .log_reader import LogReader
 
 class SupervisorOrchestrator:
     """Main orchestrator for the codex supervisor."""
@@ -465,18 +42,18 @@ class SupervisorOrchestrator:
         self.instance_manager = InstanceManager(session_dir, codex_binary)
         self.log_reader = LogReader(session_dir, self.instance_manager)
         
-        # Initialize vulnerability deep-dive manager
-        self.deepdive_manager = VulnerabilityDeepDiveManager(session_dir, codex_binary, config)
-        
-        # Initialize tools with deepdive_manager
-        self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir, self.deepdive_manager)
-        
         # Initialize context manager
         self.context_manager = ContextManager(
             max_tokens=200_000,
             buffer_tokens=15_000,  # Trigger at 185k tokens
             summarization_model="openai/o4-mini"
         )
+        
+        # Initialize vulnerability deep-dive manager
+        self.deepdive_manager = VulnerabilityDeepDiveManager(session_dir, codex_binary, config, supervisor_model)
+        
+        # Initialize tools with deepdive_manager and context_manager
+        self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir, self.deepdive_manager, self.context_manager)
         
         # Track continuation attempts
         self.continuation_count = 0
@@ -664,7 +241,7 @@ class SupervisorOrchestrator:
             return response.choices[0].message.content or "Summary generation failed"
             
         except Exception as e:
-            logging.error(f"Failed to generate continuation summary: {e}")
+            logging.error(f"❌ Orchestrator: Continuation summary failed: {type(e).__name__}: {e}")
             return "Error generating summary - proceeding with basic context."
     
     async def _load_vulnerabilities_log(self) -> str:
@@ -1052,6 +629,14 @@ class SupervisorOrchestrator:
             message = response.choices[0].message
             content = message.content or ""
             
+            # Only log if empty response - print full OpenRouter response for debugging  
+            if not content.strip() and not message.tool_calls:
+                try:
+                    response_dict = response.model_dump()
+                    logging.error(f"❌ EMPTY RESPONSE from {self.supervisor_model}. Full OpenRouter response: {response_dict}")
+                except Exception as e:
+                    logging.error(f"❌ EMPTY RESPONSE from {self.supervisor_model}. Could not serialize response: {e}")
+            
             # Handle tool calls first
             session_finished = False
             tool_calls_data = []
@@ -1108,9 +693,11 @@ class SupervisorOrchestrator:
                 else:
                     # No tool calls, just add the assistant message
                     self.conversation_history.append(assistant_message)
-            
             return session_finished
             
         except Exception as e:
-            logging.error(f"Error in supervisor turn: {e}")
+            logging.error(f"❌ Orchestrator: Supervisor API call failed with exception: {type(e).__name__}: {e}")
+            logging.error(f"❌ Orchestrator: Model: {self.supervisor_model}, Messages: {len(self.conversation_history)}")
+            import traceback
+            logging.error(f"❌ Orchestrator: Full traceback:\n{traceback.format_exc()}")
             return False

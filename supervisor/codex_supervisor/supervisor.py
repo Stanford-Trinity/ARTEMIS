@@ -17,7 +17,7 @@ try:
 except ImportError:
     pass  # dotenv not installed, use system environment variables only
 
-from .orchestrator import SupervisorOrchestrator
+from .orchestration import SupervisorOrchestrator
 
 def setup_logging(session_dir: Path, verbose: bool = False):
     """Setup logging for the supervisor."""

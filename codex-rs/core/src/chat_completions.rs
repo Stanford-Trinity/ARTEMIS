@@ -34,11 +34,12 @@ pub(crate) async fn stream_chat_completions(
     model: &str,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
+    specialist: Option<&str>,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    let full_instructions = prompt.get_full_instructions(model);
+    let full_instructions = prompt.get_full_instructions(model, specialist);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
     for item in &prompt.input {

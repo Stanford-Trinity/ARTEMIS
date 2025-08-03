@@ -41,6 +41,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         log_session_dir,
         instance_id,
         wait_for_followup,
+        mode,
         prompt,
         config_overrides,
     } = cli;
@@ -108,6 +109,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
         codex_linux_sandbox_exe,
+        specialist: Some(mode.to_string()),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -144,7 +146,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .try_init();
 
-    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config.clone()).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
 
@@ -153,7 +155,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         let instance_id_str = instance_id.clone().unwrap_or_else(|| {
             format!("codex_{}", std::process::id())
         });
-        Some(Arc::new(RealtimeLogger::new(log_dir.clone(), instance_id_str, &prompt, model.clone())?))
+        Some(Arc::new(RealtimeLogger::new(log_dir.clone(), instance_id_str, &prompt, model.clone(), config.specialist.clone())?))
     } else {
         None
     };
