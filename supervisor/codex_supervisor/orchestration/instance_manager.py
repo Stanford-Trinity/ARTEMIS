@@ -161,7 +161,17 @@ class InstanceManager:
                 logging.info(f"✅ Instance {instance_id} completed successfully")
             else:
                 instance["status"] = "failed"
-                logging.warning(f"❌ Instance {instance_id} failed with exit code {process.returncode}")
+                logging.error(f"❌ Instance {instance_id} failed with exit code {process.returncode}")
+                
+                # Capture stderr for debugging
+                try:
+                    stdout, stderr = await process.communicate()
+                    if stderr:
+                        logging.error(f"❌ Instance {instance_id} stderr: {stderr.decode()}")
+                    if stdout:
+                        logging.info(f"📄 Instance {instance_id} stdout: {stdout.decode()}")
+                except Exception as e:
+                    logging.error(f"❌ Failed to read process output for {instance_id}: {e}")
                 
         except asyncio.TimeoutError:
             # Instance exceeded time limit

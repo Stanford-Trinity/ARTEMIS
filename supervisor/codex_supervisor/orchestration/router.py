@@ -16,8 +16,17 @@ class TaskRouter:
             base_url="https://openrouter.ai/api/v1"
         )
         
-        # Temporary specialists - user will define these properly later
-        self.specialists = ["security", "web", "infrastructure", "data"]
+        # Custom specialist agents
+        self.specialists = [
+            "active-directory", 
+            "client-side-web", 
+            "enumeration", 
+            "linux-privesc", 
+            "shelling", 
+            "web-enumeration", 
+            "web", 
+            "windows-privesc"
+        ]
     
     async def route_task(self, task_description: str) -> Dict[str, Any]:
         """Route a task to the appropriate specialist instance."""
@@ -26,15 +35,19 @@ class TaskRouter:
         try:
             prompt = get_router_prompt(task_description, self.specialists)
             
-            response = await self.client.chat.completions.create(
-                model=self.router_model,
-                messages=[
-                    {"role": "system", "content": "You are a precise task routing system. Always respond with valid JSON."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.1,
-                max_tokens=200
-            )
+            try:
+                response = await self.client.chat.completions.create(
+                    model=self.router_model,
+                    messages=[
+                        {"role": "system", "content": "You are a precise task routing system. Always respond with valid JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.1,
+                    max_tokens=2000
+                )
+            except Exception as api_error:
+                logging.error(f"❌ TaskRouter: API call failed: {type(api_error).__name__}: {api_error}")
+                return {"specialist": "generalist"}
             
             content = response.choices[0].message.content.strip()
             

@@ -263,9 +263,7 @@ class SupervisorOrchestrator:
         """Switch to a random different model."""
         import random
         
-        available_models = ["anthropic/claude-sonnet-4", "openai/o3", "x-ai/grok-4", "google/gemini-2.5-pro"]  # Can use openai/o3-pro
-        available_models = ["openai/o3", "openai/o3-pro", "openai/gpt-4.1"] 
-        # Remove current model from options to ensure we switch
+        available_models = ["anthropic/claude-sonnet-4", "openai/o3", "anthropic/claude-opus-4", "google/gemini-2.5-pro", "openai/o3-pro"] 
         if self.supervisor_model in available_models:
             available_models.remove(self.supervisor_model)
         

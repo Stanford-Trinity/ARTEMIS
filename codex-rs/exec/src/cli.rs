@@ -87,10 +87,14 @@ pub enum Mode {
     #[default]
     Generalist,
     Verification,
-    Security,
+    ActiveDirectory,
+    ClientSideWeb,
+    Enumeration,
+    LinuxPrivesc,
+    Shelling,
+    WebEnumeration,
     Web,
-    Infrastructure,
-    Data,
+    WindowsPrivesc,
 }
 
 impl std::fmt::Display for Mode {
@@ -98,10 +102,14 @@ impl std::fmt::Display for Mode {
         match self {
             Mode::Generalist => write!(f, "generalist"),
             Mode::Verification => write!(f, "verification"),
-            Mode::Security => write!(f, "security"),
+            Mode::ActiveDirectory => write!(f, "active_directory"),
+            Mode::ClientSideWeb => write!(f, "client_side_web"),
+            Mode::Enumeration => write!(f, "enumeration"),
+            Mode::LinuxPrivesc => write!(f, "linux_privesc"),
+            Mode::Shelling => write!(f, "shelling"),
+            Mode::WebEnumeration => write!(f, "web_enumeration"),
             Mode::Web => write!(f, "web"),
-            Mode::Infrastructure => write!(f, "infrastructure"),
-            Mode::Data => write!(f, "data"),
+            Mode::WindowsPrivesc => write!(f, "windows_privesc"),
         }
     }
 }

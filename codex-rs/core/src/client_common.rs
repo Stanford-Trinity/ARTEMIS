@@ -18,10 +18,14 @@ use tokio::sync::mpsc;
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 /// Specialist prompt files
-const SECURITY_INSTRUCTIONS: &str = include_str!("../security.md");
+const ACTIVE_DIRECTORY_INSTRUCTIONS: &str = include_str!("../active_directory.md");
+const CLIENT_SIDE_WEB_INSTRUCTIONS: &str = include_str!("../client_side_web.md");
+const ENUMERATION_INSTRUCTIONS: &str = include_str!("../enumeration.md");
+const LINUX_PRIVESC_INSTRUCTIONS: &str = include_str!("../linux_privesc.md");
+const SHELLING_INSTRUCTIONS: &str = include_str!("../shelling.md");
+const WEB_ENUMERATION_INSTRUCTIONS: &str = include_str!("../web_enumeration.md");
 const WEB_INSTRUCTIONS: &str = include_str!("../web.md");
-const INFRASTRUCTURE_INSTRUCTIONS: &str = include_str!("../infrastructure.md");
-const DATA_INSTRUCTIONS: &str = include_str!("../data.md");
+const WINDOWS_PRIVESC_INSTRUCTIONS: &str = include_str!("../windows_privesc.md");
 
 /// API request payload for a single model turn.
 #[derive(Default, Debug, Clone)]
@@ -46,11 +50,15 @@ impl Prompt {
     pub(crate) fn get_full_instructions(&self, model: &str, specialist: Option<&str>) -> Cow<str> {
         // Select base instructions based on specialist
         let base_instructions = match specialist {
-            Some("security") => SECURITY_INSTRUCTIONS,
+            Some("active_directory") => ACTIVE_DIRECTORY_INSTRUCTIONS,
+            Some("client_side_web") => CLIENT_SIDE_WEB_INSTRUCTIONS,
+            Some("enumeration") => ENUMERATION_INSTRUCTIONS,
+            Some("linux_privesc") => LINUX_PRIVESC_INSTRUCTIONS,
+            Some("shelling") => SHELLING_INSTRUCTIONS,
+            Some("web_enumeration") => WEB_ENUMERATION_INSTRUCTIONS,
             Some("web") => WEB_INSTRUCTIONS,
-            Some("infrastructure") => INFRASTRUCTURE_INSTRUCTIONS,
-            Some("data") => DATA_INSTRUCTIONS,
-            Some("verification") => include_str!("../verification.md"),
+            Some("windows_privesc") => WINDOWS_PRIVESC_INSTRUCTIONS,
+            Some("verification") => BASE_INSTRUCTIONS, // Use prompt.md for verification
             _ => BASE_INSTRUCTIONS, // Default to generalist for None or "generalist"
         };
         

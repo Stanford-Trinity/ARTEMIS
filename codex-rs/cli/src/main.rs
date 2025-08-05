@@ -289,6 +289,16 @@ async fn run_autonomous_mode(
         config_overrides,
     )
     .with_context(|| "Failed to load codex config")?;
+    
+    // Debug: Log the actual config being used
+    println!("🔧 DEBUG: Loaded config - model: {}, provider: {}", 
+             config.model, 
+             config.model_provider.name);
+    println!("🔧 DEBUG: Driver model: {}", autonomous_cli.driver_model);
+    println!("🔧 DEBUG: OPENROUTER_API_KEY: {}", 
+             if std::env::var("OPENROUTER_API_KEY").is_ok() { "SET" } else { "NOT SET" });
+    println!("🔧 DEBUG: OPENAI_API_KEY: {}", 
+             if std::env::var("OPENAI_API_KEY").is_ok() { "SET" } else { "NOT SET" });
 
     // Initialize codex session
     let (codex, _init_event, _ctrl_c) = init_codex(config.clone()).await?;
@@ -1481,11 +1491,11 @@ async fn generate_user_prompt(
 
     println!("🔄 Calling {} with driver prompt...", model);
 
-    // Create model provider info
+    // Create model provider info - use OpenRouter for consistency
     let provider = ModelProviderInfo {
-        name: "OpenAI".to_string(),
-        base_url: "https://api.openai.com/v1".to_string(),
-        env_key: Some("OPENAI_API_KEY".to_string()),
+        name: "OpenRouter".to_string(),
+        base_url: "https://openrouter.ai/api/v1".to_string(),
+        env_key: Some("OPENROUTER_API_KEY".to_string()),
         env_key_instructions: None,
         wire_api: WireApi::Chat,
         query_params: None,
