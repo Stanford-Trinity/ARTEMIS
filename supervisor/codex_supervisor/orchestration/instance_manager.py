@@ -163,13 +163,11 @@ class InstanceManager:
                 instance["status"] = "failed"
                 logging.error(f"❌ Instance {instance_id} failed with exit code {process.returncode}")
                 
-                # Capture stderr for debugging
+                # Capture stderr for debugging (stdout removed to reduce noise)
                 try:
                     stdout, stderr = await process.communicate()
                     if stderr:
                         logging.error(f"❌ Instance {instance_id} stderr: {stderr.decode()}")
-                    if stdout:
-                        logging.info(f"📄 Instance {instance_id} stdout: {stdout.decode()}")
                 except Exception as e:
                     logging.error(f"❌ Failed to read process output for {instance_id}: {e}")
                 
