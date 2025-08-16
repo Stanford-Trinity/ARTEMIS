@@ -10,12 +10,13 @@ from typing import Dict, Any, List
 import aiofiles
 
 class SupervisorTools:
-    def __init__(self, instance_manager, log_reader, session_dir: Path, deepdive_manager=None, context_manager=None):
+    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None):
         self.instance_manager = instance_manager
         self.log_reader = log_reader
         self.session_dir = session_dir
-        self.deepdive_manager = deepdive_manager
         self.context_manager = context_manager
+        self.benchmark_mode = benchmark_mode
+        self.triage_manager = triage_manager
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
@@ -164,8 +165,8 @@ class SupervisorTools:
             {
                 "type": "function",
                 "function": {
-                    "name": "slack_webhook",
-                    "description": "Submit a vulnerability report to Slack via webhook",
+                    "name": "submit",
+                    "description": "Submit a vulnerability report for processing",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -192,12 +193,16 @@ class SupervisorTools:
                         "properties": {
                             "action": {
                                 "type": "string",
-                                "enum": ["add", "update", "remove", "complete"],
+                                "enum": ["add", "update", "remove", "complete", "add_subtask"],
                                 "description": "Action to perform on todo item"
                             },
                             "item_id": {
                                 "type": "string",
-                                "description": "Unique ID for the todo item (required for update/remove/complete)"
+                                "description": "Unique ID for the todo item (required for update/remove/complete/add_subtask)"
+                            },
+                            "parent_id": {
+                                "type": "string",
+                                "description": "Parent ID for subtasks (used with add_subtask action)"
                             },
                             "description": {
                                 "type": "string",
@@ -234,6 +239,14 @@ class SupervisorTools:
                                 "type": "string",
                                 "enum": ["high", "medium", "low"],
                                 "description": "Filter todos by priority (optional)"
+                            },
+                            "item_id": {
+                                "type": "string",
+                                "description": "Show subtasks of specific todo item (optional)"
+                            },
+                            "depth": {
+                                "type": "integer",
+                                "description": "How many levels deep to show subtasks (default: 1 when item_id specified)"
                             }
                         },
                         "required": []
@@ -347,8 +360,8 @@ class SupervisorTools:
                 return await self._write_supervisor_note(arguments)
             elif tool_name == "read_supervisor_notes":
                 return await self._read_supervisor_notes(arguments)
-            elif tool_name == "slack_webhook":
-                return await self._slack_webhook(arguments)
+            elif tool_name == "submit":
+                return await self._submit(arguments)
             elif tool_name == "update_supervisor_todo":
                 return await self._update_supervisor_todo(arguments)
             elif tool_name == "read_supervisor_todo":
@@ -490,8 +503,8 @@ class SupervisorTools:
         except Exception as e:
             return f"❌ Failed to read notes: {e}"
 
-    async def _slack_webhook(self, args: Dict[str, Any]) -> str:
-        """Submit vulnerability report to Slack webhook."""
+    async def _submit(self, args: Dict[str, Any]) -> str:
+        """Submit vulnerability report for processing (triage or direct to output)."""
         # Build vulnerability report payload
         payload = {
             "title": args["title"],
@@ -504,6 +517,18 @@ class SupervisorTools:
             "cleanup": args["cleanup"]
         }
         
+        # In benchmark mode, skip triage and go directly to Slack
+        if self.benchmark_mode:
+            return await self._send_directly_to_slack(payload)
+        
+        # Normal mode: submit to triage queue
+        if self.triage_manager:
+            return await self.triage_manager.submit_vulnerability_report(payload)
+        else:
+            return f"❌ Triage manager not available - vulnerability cannot be submitted: {args['title']}"
+    
+    async def _send_directly_to_slack(self, payload: Dict[str, Any]) -> str:
+        """Send vulnerability report directly to Slack (benchmark mode)."""
         webhook_url = "https://hooks.slack.com/triggers/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"
         
         try:
@@ -520,23 +545,12 @@ class SupervisorTools:
             stdout, stderr = await process.communicate()
             
             if process.returncode == 0:
-                logging.info("✅ Slack vulnerability report sent")
+                logging.info("✅ Slack vulnerability report sent (benchmark mode)")
                 
                 # Log vulnerability to running file
                 await self._log_vulnerability_submission(payload)
                 
-                # Silently trigger vulnerability deep-dive in background
-                if self.deepdive_manager:
-                    vulnerability_report = json.dumps(payload, indent=2)
-                    success = await self.deepdive_manager.spawn_vulnerability_deepdive(
-                        vulnerability_report, "slack_submission"
-                    )
-                    if success:
-                        logging.info(f"🔍 Auto-spawned vulnerability deep-dive for: {args['title']}")
-                    else:
-                        logging.warning(f"⚠️ Failed to spawn deep-dive for: {args['title']}")
-                
-                return f"✅ Vulnerability report sent to Slack: {args['title']}"
+                return f"✅ Vulnerability report sent to Slack: {payload['title']} (benchmark mode)"
             else:
                 error_msg = stderr.decode() if stderr else "Unknown error"
                 return f"❌ Failed to send Slack report: {error_msg}"
@@ -600,6 +614,113 @@ Cleanup:
         except Exception as e:
             logging.error(f"Error saving todo list: {e}")
 
+    def _find_todo_recursive(self, todos: List[Dict[str, Any]], item_id: str) -> tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """Find a todo item recursively and return (item, parent_list)."""
+        for todo in todos:
+            if todo["id"] == item_id:
+                return todo, todos
+            if "subtasks" in todo and todo["subtasks"]:
+                found_item, parent_list = self._find_todo_recursive(todo["subtasks"], item_id)
+                if found_item:
+                    return found_item, parent_list
+        return None, None
+
+    def _flatten_todos_recursive(self, todos: List[Dict[str, Any]], depth: int = 0) -> List[tuple[Dict[str, Any], int]]:
+        """Flatten hierarchical todos with depth information."""
+        result = []
+        for todo in todos:
+            result.append((todo, depth))
+            if "subtasks" in todo and todo["subtasks"]:
+                result.extend(self._flatten_todos_recursive(todo["subtasks"], depth + 1))
+        return result
+
+    def _count_subtasks(self, todo: Dict[str, Any]) -> tuple[int, int]:
+        """Return (total_subtasks, completed_subtasks) for a todo."""
+        if not todo.get("subtasks"):
+            return 0, 0
+        
+        total = len(todo["subtasks"])
+        completed = len([st for st in todo["subtasks"] if st["status"] == "completed"])
+        return total, completed
+
+    def _format_top_level_view(self, todos: List[Dict[str, Any]]) -> str:
+        """Format the default top-level view with subtask counts."""
+        result_lines = ["📝 Supervisor Todo List:", ""]
+        
+        # Summary stats
+        flattened_todos = self._flatten_todos_recursive(todos)
+        total_todos = len(flattened_todos)
+        completed = len([t for t, _ in flattened_todos if t["status"] == "completed"])
+        pending = total_todos - completed
+        
+        result_lines.append(f"📊 Progress: {completed}/{total_todos} completed ({pending} pending)")
+        result_lines.append("")
+        
+        for todo in todos:
+            status_emoji = "✅" if todo["status"] == "completed" else "⏳"
+            priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(todo["priority"], "⚪")
+            
+            # Add subtask count info
+            total_subtasks, completed_subtasks = self._count_subtasks(todo)
+            subtask_info = ""
+            if total_subtasks > 0:
+                if completed_subtasks == total_subtasks:
+                    subtask_info = f" ({total_subtasks} subtasks, all completed)"
+                else:
+                    subtask_info = f" ({total_subtasks} subtasks, {completed_subtasks} completed)"
+            
+            result_lines.append(f"{status_emoji} {priority_emoji} [{todo['id']}] {todo['description']}{subtask_info}")
+            
+            if todo.get("notes"):
+                result_lines.append(f"    💭 {todo['notes']}")
+            
+            created = datetime.fromisoformat(todo["created_at"].replace('Z', '+00:00'))
+            result_lines.append(f"    📅 Created: {created.strftime('%Y-%m-%d %H:%M UTC')}")
+            
+            if todo["status"] == "completed" and todo.get("completed_at"):
+                completed_dt = datetime.fromisoformat(todo["completed_at"].replace('Z', '+00:00'))
+                result_lines.append(f"    ✅ Completed: {completed_dt.strftime('%Y-%m-%d %H:%M UTC')}")
+            
+            result_lines.append("")
+        
+        return "\n".join(result_lines)
+
+    def _format_subtasks_view(self, parent_todo: Dict[str, Any], subtasks: List[Dict[str, Any]], depth: int) -> str:
+        """Format the subtasks drill-down view."""
+        result_lines = [f"📝 Subtasks of: {parent_todo['description']}", ""]
+        
+        def add_subtasks_recursive(subtask_list, current_depth, max_depth):
+            if current_depth >= max_depth:
+                return
+                
+            for subtask in subtask_list:
+                indent = "  " * current_depth
+                tree_char = "├─ "
+                
+                status_emoji = "✅" if subtask["status"] == "completed" else "⏳"
+                priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(subtask["priority"], "⚪")
+                
+                result_lines.append(f"{indent}{tree_char}{status_emoji} {priority_emoji} [{subtask['id']}] {subtask['description']}")
+                
+                if subtask.get("notes"):
+                    result_lines.append(f"{indent}    💭 {subtask['notes']}")
+                
+                created = datetime.fromisoformat(subtask["created_at"].replace('Z', '+00:00'))
+                result_lines.append(f"{indent}    📅 Created: {created.strftime('%Y-%m-%d %H:%M UTC')}")
+                
+                if subtask["status"] == "completed" and subtask.get("completed_at"):
+                    completed_dt = datetime.fromisoformat(subtask["completed_at"].replace('Z', '+00:00'))
+                    result_lines.append(f"{indent}    ✅ Completed: {completed_dt.strftime('%Y-%m-%d %H:%M UTC')}")
+                
+                # Recursively show deeper subtasks if within depth limit
+                if subtask.get("subtasks") and current_depth + 1 < max_depth:
+                    add_subtasks_recursive(subtask["subtasks"], current_depth + 1, max_depth)
+                
+                result_lines.append("")
+        
+        add_subtasks_recursive(subtasks, 0, depth)
+        return "\n".join(result_lines)
+
     async def _update_supervisor_todo(self, args: Dict[str, Any]) -> str:
         """Add, update, or remove items from the supervisor's todo list."""
         action = args["action"]
@@ -625,7 +746,8 @@ Cleanup:
                     "status": "pending",
                     "notes": notes,
                     "created_at": datetime.now(timezone.utc).isoformat(),
-                    "updated_at": datetime.now(timezone.utc).isoformat()
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "subtasks": []
                 }
                 
                 todos.append(new_todo)
@@ -634,17 +756,45 @@ Cleanup:
                 logging.info(f"📝 Added todo item: {description}")
                 return f"✅ Added todo item '{description}' with ID: {new_id}"
             
+            elif action == "add_subtask":
+                if not item_id or not description:
+                    return "❌ Parent ID and description are required for adding subtasks"
+                
+                # Find the parent todo item recursively
+                parent_todo, parent_list = self._find_todo_recursive(todos, item_id)
+                if not parent_todo:
+                    return f"❌ Parent todo item with ID '{item_id}' not found"
+                
+                # Generate new subtask ID
+                new_id = str(uuid.uuid4())[:8]
+                
+                new_subtask = {
+                    "id": new_id,
+                    "description": description,
+                    "priority": priority,
+                    "status": "pending",
+                    "notes": notes,
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "subtasks": []
+                }
+                
+                # Ensure parent has subtasks array
+                if "subtasks" not in parent_todo:
+                    parent_todo["subtasks"] = []
+                
+                parent_todo["subtasks"].append(new_subtask)
+                await self._save_todo_list(todos)
+                
+                logging.info(f"📝 Added subtask: {description} to parent: {parent_todo['description']}")
+                return f"✅ Added subtask '{description}' with ID: {new_id} to parent '{parent_todo['description']}'"
+            
             elif action in ["update", "remove", "complete"]:
                 if not item_id:
                     return f"❌ Item ID is required for {action} action"
                 
-                # Find the todo item
-                todo_item = None
-                for todo in todos:
-                    if todo["id"] == item_id:
-                        todo_item = todo
-                        break
-                
+                # Find the todo item recursively
+                todo_item, parent_list = self._find_todo_recursive(todos, item_id)
                 if not todo_item:
                     return f"❌ Todo item with ID '{item_id}' not found"
                 
@@ -669,7 +819,7 @@ Cleanup:
                     return f"✅ Completed todo item '{todo_item['description']}'"
                 
                 elif action == "remove":
-                    todos = [t for t in todos if t["id"] != item_id]
+                    parent_list.remove(todo_item)
                     await self._save_todo_list(todos)
                     return f"✅ Removed todo item '{todo_item['description']}'"
             
@@ -683,6 +833,8 @@ Cleanup:
         """Read the current supervisor todo list with progress tracking."""
         filter_status = args.get("filter_status", "all")
         filter_priority = args.get("filter_priority")
+        item_id = args.get("item_id")
+        depth = args.get("depth", 1)
         
         try:
             todos = await self._load_todo_list()
@@ -690,12 +842,32 @@ Cleanup:
             if not todos:
                 return "📝 No todo items yet. Use update_supervisor_todo to add items."
             
-            # Apply filters
-            filtered_todos = todos
+            # Handle drill-down view for specific item
+            if item_id:
+                target_todo, _ = self._find_todo_recursive(todos, item_id)
+                if not target_todo:
+                    return f"❌ Todo item with ID '{item_id}' not found"
+                
+                if not target_todo.get("subtasks"):
+                    return f"📝 Todo item '{target_todo['description']}' has no subtasks."
+                
+                # Apply filters to subtasks
+                filtered_todos = target_todo["subtasks"]
+                if filter_status != "all":
+                    filtered_todos = [t for t in filtered_todos if t["status"] == filter_status]
+                if filter_priority:
+                    filtered_todos = [t for t in filtered_todos if t["priority"] == filter_priority]
+                
+                if not filtered_todos:
+                    filter_desc = f" (filtered by {filter_status}" + (f", {filter_priority}" if filter_priority else "") + ")"
+                    return f"📝 No subtasks of '{target_todo['description']}' match filters{filter_desc}."
+                
+                return self._format_subtasks_view(target_todo, filtered_todos, depth)
             
+            # Default top-level view with filters
+            filtered_todos = todos
             if filter_status != "all":
                 filtered_todos = [t for t in filtered_todos if t["status"] == filter_status]
-            
             if filter_priority:
                 filtered_todos = [t for t in filtered_todos if t["priority"] == filter_priority]
             
@@ -707,37 +879,8 @@ Cleanup:
             priority_order = {"high": 0, "medium": 1, "low": 2}
             filtered_todos.sort(key=lambda x: (priority_order.get(x["priority"], 1), x["created_at"]))
             
-            # Format output
-            result_lines = ["📝 Supervisor Todo List:", ""]
-            
-            # Summary stats
-            total_todos = len(todos)
-            completed = len([t for t in todos if t["status"] == "completed"])
-            pending = total_todos - completed
-            
-            result_lines.append(f"📊 Progress: {completed}/{total_todos} completed ({pending} pending)")
-            result_lines.append("")
-            
-            # List items
-            for todo in filtered_todos:
-                status_emoji = "✅" if todo["status"] == "completed" else "⏳"
-                priority_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(todo["priority"], "⚪")
-                
-                result_lines.append(f"{status_emoji} {priority_emoji} [{todo['id']}] {todo['description']}")
-                
-                if todo.get("notes"):
-                    result_lines.append(f"    💭 {todo['notes']}")
-                
-                created = datetime.fromisoformat(todo["created_at"].replace('Z', '+00:00'))
-                result_lines.append(f"    📅 Created: {created.strftime('%Y-%m-%d %H:%M UTC')}")
-                
-                if todo["status"] == "completed" and todo.get("completed_at"):
-                    completed_dt = datetime.fromisoformat(todo["completed_at"].replace('Z', '+00:00'))
-                    result_lines.append(f"    ✅ Completed: {completed_dt.strftime('%Y-%m-%d %H:%M UTC')}")
-                
-                result_lines.append("")
-            
-            return "\n".join(result_lines)
+            # Return formatted top-level view
+            return self._format_top_level_view(filtered_todos)
             
         except Exception as e:
             return f"❌ Error reading todo list: {e}"

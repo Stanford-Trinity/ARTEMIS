@@ -5,10 +5,6 @@ from .orchestrator import (
     SupervisorOrchestrator
 )
 
-from .vulnerability_deepdive_manager import (
-    VulnerabilityDeepDiveManager
-)
-
 from .instance_manager import (
     InstanceManager
 )
@@ -22,7 +18,6 @@ from .router import (
 )
 
 __all__ = [
-    "VulnerabilityDeepDiveManager",
     "InstanceManager", 
     "LogReader",
     "SupervisorOrchestrator",

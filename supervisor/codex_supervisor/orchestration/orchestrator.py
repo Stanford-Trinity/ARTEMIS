@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+ supervisor/codex_supervisor/orchestration/orchestrator.py #!/usr/bin/env python3
 import asyncio
 import json
 import logging
@@ -18,25 +18,24 @@ from ..prompts.summarization_prompt import get_summarization_prompt
 from ..prompts.supervisor_prompt import SupervisorPrompt
 from ..context_manager import ContextManager
 
-from .vulnerability_deepdive_manager import VulnerabilityDeepDiveManager
 from .instance_manager import InstanceManager
 from .log_reader import LogReader
+from ..triage.triage_manager import TriageManager
 
 class SupervisorOrchestrator:
     """Main orchestrator for the codex supervisor."""
     
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
-                 duration_minutes: int = 60, work_hours: Tuple[int, int] = (7, 18),
-                 ignore_work_hours: bool = False, verbose: bool = False, codex_binary: str = "./target/release/codex"):
+                 duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
+                 benchmark_mode: bool = False):
         
         self.config = config
         self.session_dir = session_dir
         self.supervisor_model = supervisor_model
         self.duration_minutes = duration_minutes
-        self.work_hours = work_hours
-        self.ignore_work_hours = ignore_work_hours
         self.verbose = verbose
         self.codex_binary = codex_binary
+        self.benchmark_mode = benchmark_mode
         
         # Initialize components
         self.instance_manager = InstanceManager(session_dir, codex_binary)
@@ -49,11 +48,26 @@ class SupervisorOrchestrator:
             summarization_model="openai/o4-mini"
         )
         
-        # Initialize vulnerability deep-dive manager
-        self.deepdive_manager = VulnerabilityDeepDiveManager(session_dir, codex_binary, config, supervisor_model)
+        # Initialize triage manager (if not in benchmark mode)
+        self.triage_manager = None
+        if not benchmark_mode:
+            self.triage_manager = TriageManager(
+                session_dir=session_dir,
+                task_config=config,
+                supervisor_model=supervisor_model,
+                api_key=os.getenv("OPENROUTER_API_KEY"),
+                codex_binary=codex_binary
+            )
         
-        # Initialize tools with deepdive_manager and context_manager
-        self.tools = SupervisorTools(self.instance_manager, self.log_reader, session_dir, self.deepdive_manager, self.context_manager)
+        # Initialize tools with context_manager, benchmark_mode, and triage_manager
+        self.tools = SupervisorTools(
+            self.instance_manager, 
+            self.log_reader, 
+            session_dir, 
+            context_manager=self.context_manager, 
+            benchmark_mode=benchmark_mode,
+            triage_manager=self.triage_manager
+        )
         
         # Track continuation attempts
         self.continuation_count = 0
@@ -547,6 +561,23 @@ class SupervisorOrchestrator:
         """Generate user message with instance updates."""
         instance_responses = await self.instance_manager.check_for_responses()
         updates = []
+        
+        # Check for triage feedback from active triagers
+        if self.triage_manager:
+            feedback_dirs = self.triage_manager.get_triager_feedback_dirs()
+            for triager_dir in feedback_dirs:
+                feedback_file = triager_dir / "supervisor_feedback.txt"
+                if feedback_file.exists():
+                    try:
+                        async with aiofiles.open(feedback_file, 'r') as f:
+                            feedback_content = await f.read()
+                        # Add feedback as update
+                        updates.append(feedback_content)
+                        # Delete feedback file after reading
+                        feedback_file.unlink()
+                        logging.info(f"📥 Consumed triage feedback from {triager_dir.name}")
+                    except Exception as e:
+                        logging.error(f"❌ Error reading triage feedback from {triager_dir}: {e}")
         
         if instance_responses:
             for instance_id, response in instance_responses.items():

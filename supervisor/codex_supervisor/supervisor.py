@@ -18,6 +18,7 @@ except ImportError:
     pass  # dotenv not installed, use system environment variables only
 
 from .orchestration import SupervisorOrchestrator
+from .todo_generator import TodoGenerator
 
 def setup_logging(session_dir: Path, verbose: bool = False):
     """Setup logging for the supervisor."""
@@ -51,18 +52,14 @@ async def main():
                       help='Duration to run (minutes)')
     parser.add_argument('--supervisor-model', '-m', default="openai/o4-mini",
                       help='Model for supervisor LLM (overrides environment variable)')
-    parser.add_argument('--work-start-hour', type=int, default=7,
-                      help='Work start hour (Pacific)')
-    parser.add_argument('--work-end-hour', type=int, default=18,
-                      help='Work end hour (Pacific)')
-    parser.add_argument('--ignore-work-hours', action='store_true',
-                      help='Ignore work hours and run 24/7')
     parser.add_argument('--resume-dir', type=Path,
                       help='Resume from existing session')
     parser.add_argument('--verbose', '-v', action='store_true',
                       help='Verbose logging')
     parser.add_argument('--codex-binary', default='./target/release/codex',
                       help='Path to codex binary')
+    parser.add_argument('--benchmark-mode', action='store_true',
+                      help='Enable benchmark mode (skip triage, direct to Slack)')
     
     args = parser.parse_args()
     
@@ -106,6 +103,12 @@ async def main():
     supervisor_model = args.supervisor_model or os.getenv("SUPERVISOR_MODEL", "o3")
     print(f"🤖 Using supervisor model: {supervisor_model}")
     
+    # Show benchmark mode status
+    if args.benchmark_mode:
+        print("🏁 BENCHMARK MODE ENABLED - Triage process will be skipped")
+    else:
+        print("🔍 Normal mode - Vulnerabilities will go through triage process")
+    
     # Resolve codex binary path to absolute path
     codex_binary_path = Path(args.codex_binary).resolve()
     if not codex_binary_path.exists():
@@ -113,16 +116,49 @@ async def main():
         sys.exit(1)
     print(f"✅ Codex binary found: {codex_binary_path}")
     
+    # Generate initial TODOs if this is a new session
+    todo_file = session_dir / "supervisor_todo.json"
+    if not args.resume_dir and not todo_file.exists():
+        print("🎯 Generating initial TODO list from configuration...")
+        try:
+            # Convert config to string format for TODO generation
+            config_content = yaml.dump(config, default_flow_style=False)
+            
+            # Generate TODOs using Claude
+            todo_generator = TodoGenerator(api_key)
+            initial_todos = await todo_generator.generate_todos_from_config(config_content)
+            
+            # Save TODOs to session directory
+            await todo_generator.save_todos_to_file(initial_todos, todo_file)
+            
+            # Count total todos (including subtasks)
+            def count_all_todos(todos):
+                total = len(todos)
+                for todo in todos:
+                    if todo.get("subtasks"):
+                        total += count_all_todos(todo["subtasks"])
+                return total
+            
+            total_todo_count = count_all_todos(initial_todos)
+            print(f"✅ Generated {len(initial_todos)} top-level TODOs ({total_todo_count} total including subtasks)")
+            
+        except Exception as e:
+            logging.error(f"Failed to generate initial TODOs: {e}")
+            print("⚠️  Continuing without pre-generated TODOs")
+    elif args.resume_dir:
+        print("🔄 Using existing TODO list from resumed session")
+    else:
+        print("📝 TODO file already exists, skipping generation")
+    
     # Create and run orchestrator
     orchestrator = SupervisorOrchestrator(
         config=config,
         session_dir=session_dir,
         supervisor_model=supervisor_model,
         duration_minutes=args.duration,
-        work_hours=(args.work_start_hour, args.work_end_hour),
-        ignore_work_hours=args.ignore_work_hours,
         verbose=args.verbose,
-        codex_binary=str(codex_binary_path)
+        codex_binary=str(codex_binary_path),
+        benchmark_mode=args.benchmark_mode
     )
     
     # Create a task for the orchestrator
