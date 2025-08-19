@@ -1,4 +1,4 @@
- supervisor/codex_supervisor/orchestration/orchestrator.py #!/usr/bin/env python3
+#!/usr/bin/env python3
 import asyncio
 import json
 import logging
@@ -37,18 +37,15 @@ class SupervisorOrchestrator:
         self.codex_binary = codex_binary
         self.benchmark_mode = benchmark_mode
         
-        # Initialize components
         self.instance_manager = InstanceManager(session_dir, codex_binary)
         self.log_reader = LogReader(session_dir, self.instance_manager)
         
-        # Initialize context manager
         self.context_manager = ContextManager(
             max_tokens=200_000,
-            buffer_tokens=15_000,  # Trigger at 185k tokens
+            buffer_tokens=15_000,
             summarization_model="openai/o4-mini"
         )
         
-        # Initialize triage manager (if not in benchmark mode)
         self.triage_manager = None
         if not benchmark_mode:
             self.triage_manager = TriageManager(
@@ -59,7 +56,6 @@ class SupervisorOrchestrator:
                 codex_binary=codex_binary
             )
         
-        # Initialize tools with context_manager, benchmark_mode, and triage_manager
         self.tools = SupervisorTools(
             self.instance_manager, 
             self.log_reader, 
@@ -69,21 +65,17 @@ class SupervisorOrchestrator:
             triage_manager=self.triage_manager
         )
         
-        # Track continuation attempts
         self.continuation_count = 0
         
-        # OpenRouter client (OpenAI-compatible API)
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_API_KEY")
         )
         
-        # Session state
         self.conversation_history = []
         self.running = False
         self.heartbeat_file = session_dir / "supervisor_heartbeat.json"
         
-        # Initialize prompt manager
         self.prompt = SupervisorPrompt()
         
         logging.info(f"🎯 Supervisor initialized with model: {supervisor_model}")
@@ -92,13 +84,11 @@ class SupervisorOrchestrator:
         """Main supervisor loop."""
         self.running = True
         
-        # Initialize conversation with system prompt and task config
         self.conversation_history.append({
             "role": "system",
             "content": self.prompt.get_system_prompt()
         })
         
-        # Add initial task context
         initial_context = self.prompt.format_initial_context(
             self.config, self.duration_minutes, str(self.session_dir)
         )
@@ -114,7 +104,6 @@ class SupervisorOrchestrator:
         logging.info(f"🎯 Supervisor starting {self.duration_minutes}min session")
         logging.info(f"📅 Session will end at: {end_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         
-        # Save initial session metadata
         await self._save_session_metadata(start_time, end_time)
         
         iteration = 0
@@ -124,14 +113,9 @@ class SupervisorOrchestrator:
                 iteration += 1
                 logging.info(f"🔄 Supervisor iteration {iteration}")
                 
-                # Check work hours and sleep if needed (unless ignored)
-                if not self.ignore_work_hours:
-                    await self._wait_for_work_hours()
                 
-                # Update heartbeat
                 await self._update_heartbeat(iteration, start_time)
                 
-                # Check for instance updates and add user message if needed
                 user_message = await self._generate_instance_update_message()
                 if user_message:
                     self.conversation_history.append({
@@ -139,34 +123,29 @@ class SupervisorOrchestrator:
                         "content": user_message
                     })
                 
-                # Get supervisor decision and handle tool calls
                 session_finished = await self._handle_supervisor_turn()
                 
-                # Save conversation state
                 await self._save_conversation_state(iteration)
                 
-                # Check if supervisor called finished
                 if session_finished:
-                    # Check if we still have time remaining for continuation
                     time_remaining = end_time - datetime.now(timezone.utc)
                     if time_remaining.total_seconds() > 300:  # At least 5 minutes remaining
                         logging.info(f"🔄 Supervisor called finished but {time_remaining.total_seconds()/60:.1f} minutes remain - attempting continuation")
                         continuation_success = await self._attempt_continuation(start_time, end_time)
                         if continuation_success:
-                            continue  # Continue the loop with fresh model/conversation
+                            continue  
                     
                     logging.info("✅ Supervisor completed session")
                     break
                 
-                # Wait before next iteration
-                await asyncio.sleep(30)  # 30 second intervals
+                await asyncio.sleep(30)     
                 
             except KeyboardInterrupt:
                 logging.info("⏹️ Supervisor interrupted")
                 break
             except Exception as e:
                 logging.error(f"Error in supervisor loop: {e}")
-                await asyncio.sleep(60)  # Wait longer on error
+                await asyncio.sleep(60)  
         
         logging.info("✅ Supervisor loop completed")
         await self.shutdown()
@@ -177,13 +156,10 @@ class SupervisorOrchestrator:
             self.continuation_count += 1
             logging.info(f"🔄 Starting continuation attempt #{self.continuation_count}")
             
-            # Create continuation summary
             summary = await self._create_continuation_summary()
             
-            # Switch to a random different model
             await self._switch_to_random_model()
             
-            # Reset conversation with fresh context
             await self._reset_conversation_for_continuation(summary, start_time, end_time)
             
             logging.info(f"✅ Successfully initialized continuation #{self.continuation_count} with model {self.supervisor_model}")
@@ -195,17 +171,13 @@ class SupervisorOrchestrator:
     
     async def _create_continuation_summary(self) -> str:
         """Create a summary for continuation by truncating and summarizing conversation content."""
-        # Extract all messages after the first user message (skip system + initial task)
         if len(self.conversation_history) <= 2:
             return "No significant conversation history to summarize."
         
-        # Get conversation content (everything after system + initial user message)
         conversation_content = self.conversation_history[2:]  # Skip system + initial user
         
-        # Truncate to fit within token limits (185k)
         truncated_content = await self._truncate_to_token_limit(conversation_content)
         
-        # Create summary of the conversation content
         summary_content = await self._summarize_conversation_content(truncated_content)
         
         return summary_content
@@ -214,7 +186,6 @@ class SupervisorOrchestrator:
         """Truncate messages to fit within 185k token limit, removing older messages first."""
         max_tokens = 185_000
         
-        # Start from the end and work backwards, keeping as much recent content as possible
         truncated = []
         current_tokens = 0
         
@@ -222,10 +193,9 @@ class SupervisorOrchestrator:
             message_tokens = self.context_manager.count_tokens([message])
             
             if current_tokens + message_tokens <= max_tokens:
-                truncated.insert(0, message)  # Insert at beginning to maintain order
+                truncated.insert(0, message)
                 current_tokens += message_tokens
             else:
-                # We've hit the limit, stop adding older messages
                 break
         
         if len(truncated) < len(messages):
@@ -238,10 +208,8 @@ class SupervisorOrchestrator:
         if not messages:
             return "No conversation content to summarize."
         
-        # Format messages for summarization
         formatted_content = self.context_manager._format_messages_for_summary(messages)
         
-        # Create summary prompt using unified template
         summary_prompt = get_summarization_prompt(formatted_content)
 
         try:
@@ -289,19 +257,15 @@ class SupervisorOrchestrator:
     
     async def _reset_conversation_for_continuation(self, summary: str, start_time: datetime, end_time: datetime) -> None:
         """Reset conversation history with continuation context."""
-        # Clear conversation and start fresh
         self.conversation_history = []
         
-        # Add system prompt
         self.conversation_history.append({
             "role": "system",
             "content": self.prompt.get_system_prompt()
         })
         
-        # Load vulnerabilities found so far
         vulnerabilities_content = await self._load_vulnerabilities_log()
         
-        # Create continuation context using external template
         time_remaining = end_time - datetime.now(timezone.utc)
         initial_context = self.prompt.format_initial_context(
             self.config, self.duration_minutes, str(self.session_dir)
@@ -316,32 +280,9 @@ class SupervisorOrchestrator:
             "content": continuation_context
         })
     
-    async def _wait_for_work_hours(self):
-        """Sleep until within work hours if currently outside."""
-        import pytz
-        
-        while not self._is_work_hours():
-            pacific = pytz.timezone('US/Pacific')
-            now_pacific = datetime.now(pacific)
-            
-            # Calculate minutes until work starts
-            start_hour = self.work_hours[0]
-            next_start = now_pacific.replace(hour=start_hour, minute=0, second=0, microsecond=0)
-            
-            # If past work hours today, wait until tomorrow
-            if now_pacific.hour >= self.work_hours[1]:
-                next_start += timedelta(days=1)
-            
-            sleep_minutes = int((next_start - now_pacific).total_seconds() / 60)
-            
-            if sleep_minutes > 0:
-                logging.info(f"😴 Outside work hours, sleeping {sleep_minutes}min until {next_start.strftime('%H:%M Pacific')}")
-                await asyncio.sleep(min(sleep_minutes * 60, 3600))  # Sleep max 1 hour at a time
-    
     async def _get_supervisor_response(self, instance_responses: Dict[str, str] = None) -> Optional[str]:
         """Get a response from the supervisor model."""
         try:
-            # Make API call
             response = await self.client.chat.completions.create(
                 model=self.supervisor_model,
                 messages=self.conversation_history,
@@ -353,7 +294,6 @@ class SupervisorOrchestrator:
             message = response.choices[0].message
             content = message.content or ""
             
-            # Handle tool calls
             if message.tool_calls:
                 for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
@@ -365,7 +305,6 @@ class SupervisorOrchestrator:
                     logging.info(f"🔧 Supervisor calling tool: {tool_name}")
                     tool_result = await self.tools.handle_tool_call(tool_name, arguments)
                     
-                    # Add tool result to content using prompt formatter
                     content += self.prompt.format_tool_result(tool_name, tool_result)
             
             return content if content.strip() else None
@@ -373,16 +312,6 @@ class SupervisorOrchestrator:
         except Exception as e:
             logging.error(f"Error getting supervisor response: {e}")
             return None
-    
-    def _is_work_hours(self) -> bool:
-        """Check if current time is within configured work hours (Pacific)."""
-        import pytz
-        pacific = pytz.timezone('US/Pacific')
-        now_pacific = datetime.now(pacific)
-        current_hour = now_pacific.hour
-        
-        start_hour, end_hour = self.work_hours
-        return start_hour <= current_hour < end_hour
     
     async def _update_heartbeat(self, iteration: int, start_time: datetime):
         """Update supervisor heartbeat file."""
@@ -393,7 +322,6 @@ class SupervisorOrchestrator:
             "iteration": iteration,
             "start_time": start_time.isoformat(),
             "active_instances": len([i for i in self.instance_manager.instances.values() if i["status"] == "running"]),
-            "work_hours": f"{self.work_hours[0]}:00-{self.work_hours[1]}:00 Pacific",
             "status": "running"
         }
         
@@ -412,12 +340,7 @@ class SupervisorOrchestrator:
                 "session_id": self.session_dir.name,
                 "start_time": start_time.isoformat(),
                 "planned_end_time": end_time.isoformat(),
-                "duration_minutes": self.duration_minutes,
-                "work_hours": {
-                    "start_hour": self.work_hours[0],
-                    "end_hour": self.work_hours[1],
-                    "timezone": "US/Pacific"
-                }
+                "duration_minutes": self.duration_minutes
             },
             "supervisor_config": {
                 "model": self.supervisor_model,
@@ -463,7 +386,6 @@ class SupervisorOrchestrator:
             async with aiofiles.open(state_file, 'w') as f:
                 await f.write(json.dumps(state, indent=2))
                 
-            # Also update session metadata with runtime stats
             await self._update_session_metadata(iteration)
         except Exception as e:
             logging.error(f"Failed to save conversation state: {e}")
@@ -473,11 +395,9 @@ class SupervisorOrchestrator:
         metadata_file = self.session_dir / "session_metadata.json"
         
         try:
-            # Read existing metadata
             async with aiofiles.open(metadata_file, 'r') as f:
                 metadata = json.loads(await f.read())
             
-            # Update runtime stats
             all_instances = self.instance_manager.instances
             completed = sum(1 for i in all_instances.values() if i["status"] == "completed")
             failed = sum(1 for i in all_instances.values() if i["status"] in ["failed", "timeout", "error"])
@@ -490,7 +410,6 @@ class SupervisorOrchestrator:
                 "last_updated": datetime.now(timezone.utc).isoformat()
             })
             
-            # Save updated metadata
             async with aiofiles.open(metadata_file, 'w') as f:
                 await f.write(json.dumps(metadata, indent=2))
                 
@@ -502,7 +421,6 @@ class SupervisorOrchestrator:
         logging.info("🛑 Shutting down supervisor...")
         self.running = False
         
-        # Terminate all instances concurrently for faster shutdown
         instance_ids = list(self.instance_manager.instances.keys())
         if instance_ids:
             logging.info(f"🧹 Cleaning up {len(instance_ids)} instances...")
@@ -511,17 +429,15 @@ class SupervisorOrchestrator:
                 for instance_id in instance_ids
             ]
             
-            # Wait for all terminations to complete with short timeout
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*termination_tasks, return_exceptions=True), 
-                    timeout=3.0  # Reduced from 15 to 3 seconds
+                    timeout=3.0
                 )
                 logging.info("✅ All instances terminated")
             except asyncio.TimeoutError:
                 logging.warning("⚠️  Some instances may not have terminated cleanly")
         
-        # Update final heartbeat
         try:
             heartbeat = {
                 "supervisor_pid": os.getpid(),
@@ -534,7 +450,6 @@ class SupervisorOrchestrator:
         except Exception as e:
             logging.error(f"Failed to update final heartbeat: {e}")
         
-        # Save final session metadata
         try:
             metadata_file = self.session_dir / "session_metadata.json"
             async with aiofiles.open(metadata_file, 'r') as f:
@@ -562,7 +477,6 @@ class SupervisorOrchestrator:
         instance_responses = await self.instance_manager.check_for_responses()
         updates = []
         
-        # Check for triage feedback from active triagers
         if self.triage_manager:
             feedback_dirs = self.triage_manager.get_triager_feedback_dirs()
             for triager_dir in feedback_dirs:
@@ -571,9 +485,7 @@ class SupervisorOrchestrator:
                     try:
                         async with aiofiles.open(feedback_file, 'r') as f:
                             feedback_content = await f.read()
-                        # Add feedback as update
                         updates.append(feedback_content)
-                        # Delete feedback file after reading
                         feedback_file.unlink()
                         logging.info(f"📥 Consumed triage feedback from {triager_dir.name}")
                     except Exception as e:
@@ -583,7 +495,6 @@ class SupervisorOrchestrator:
             for instance_id, response in instance_responses.items():
                 updates.append(f"- Instance {instance_id} is waiting for followup. Last response: '{response}'. Use send_followup to continue or terminate_instance to end.")
         
-        # Check for completed instances (not waiting)
         all_instances = self.instance_manager.get_active_instances()
         completed_instances = {
             instance_id: info for instance_id, info in all_instances.items() 
@@ -594,14 +505,12 @@ class SupervisorOrchestrator:
             status = info["status"]
             updates.append(f"- Instance {instance_id} {status}. Use read_instance_logs to see full conversation and decide next steps.")
         
-        # Check running instances and provide status updates
         running_instances = {
             instance_id: info for instance_id, info in all_instances.items()
             if info["status"] == "running" and instance_id not in instance_responses
         }
         
         if running_instances:
-            # Provide regular status updates for running instances
             instance_list = []
             for instance_id, info in running_instances.items():
                 start_time = info.get("start_time", "unknown")
@@ -623,7 +532,6 @@ class SupervisorOrchestrator:
                 updates.append(f"- There are {len(running_instances)} instances currently running: {', '.join(instance_list)}.")
         elif not instance_responses:
             updates.append("- There are no instances currently running.")
-            # Check if we should suggest ending the session
             if completed_instances:
                 updates.append("- Review completed instance logs and decide whether to spawn new instances or call finished to end session.")
         
@@ -635,18 +543,14 @@ class SupervisorOrchestrator:
     async def _handle_supervisor_turn(self) -> bool:
         """Handle a complete supervisor turn with tool calls. Returns True if session should finish."""
         try:
-            # Check if we need to summarize conversation history due to token limits
             if self.context_manager.should_summarize(self.conversation_history):
-                # Get context stats for logging
                 stats = self.context_manager.get_context_stats(self.conversation_history)
                 logging.info(f"⚠️  Context approaching token limit: {stats['total_tokens']:,} tokens (max: {stats['max_tokens']:,})")
                 
-                # Summarize conversation history
                 self.conversation_history = await self.context_manager.summarize_conversation(
                     self.conversation_history, preserve_recent=20
                 )
             
-            # Make API call
             response = await self.client.chat.completions.create(
                 model=self.supervisor_model,
                 messages=self.conversation_history,
@@ -658,7 +562,6 @@ class SupervisorOrchestrator:
             message = response.choices[0].message
             content = message.content or ""
             
-            # Only log if empty response - print full OpenRouter response for debugging  
             if not content.strip() and not message.tool_calls:
                 try:
                     response_dict = response.model_dump()
@@ -666,7 +569,6 @@ class SupervisorOrchestrator:
                 except Exception as e:
                     logging.error(f"❌ EMPTY RESPONSE from {self.supervisor_model}. Could not serialize response: {e}")
             
-            # Handle tool calls first
             session_finished = False
             tool_calls_data = []
             
@@ -678,7 +580,6 @@ class SupervisorOrchestrator:
                     except json.JSONDecodeError:
                         arguments = {}
                     
-                    # Store tool call data
                     tool_calls_data.append({
                         "id": tool_call.id,
                         "type": "function",
@@ -691,36 +592,30 @@ class SupervisorOrchestrator:
                     logging.info(f"🔧 Supervisor calling tool: {tool_name}")
                     tool_result = await self.tools.handle_tool_call(tool_name, arguments)
                     
-                    # Check if this was the finished tool
                     if tool_name == "finished":
                         session_finished = True
                     
-                    # Add tool response to conversation
                     self.conversation_history.append({
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "content": tool_result
                     })
             
-            # Add single assistant message (with or without tool calls)
             if content.strip() or tool_calls_data:
                 assistant_message = {
                     "role": "assistant",
                     "content": content,
-                    "model": self.supervisor_model  # Track which model generated this response
+                    "model": self.supervisor_model
                 }
                 if tool_calls_data:
                     assistant_message["tool_calls"] = tool_calls_data
                 
-                # Insert assistant message before tool responses
                 if tool_calls_data:
-                    # Move tool responses to end and insert assistant message before them
                     tool_responses = self.conversation_history[-len(tool_calls_data):]
                     self.conversation_history = self.conversation_history[:-len(tool_calls_data)]
                     self.conversation_history.append(assistant_message)
                     self.conversation_history.extend(tool_responses)
                 else:
-                    # No tool calls, just add the assistant message
                     self.conversation_history.append(assistant_message)
             return session_finished
             

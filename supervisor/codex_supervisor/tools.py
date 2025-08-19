@@ -4,6 +4,7 @@ import logging
 import re
 import subprocess
 import uuid
+import tiktoken
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, List
@@ -20,6 +21,45 @@ class SupervisorTools:
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
+        self.tokenizer = tiktoken.get_encoding("o200k_base")
+
+    def _count_text_tokens(self, text: str) -> int:
+        """Count tokens in a text string."""
+        return len(self.tokenizer.encode(text))
+    
+    def _smart_truncate_logs(self, logs: str, max_tokens: int) -> str:
+        """Intelligently truncate logs to fit within token limit, preserving recent content."""
+        if not logs:
+            return logs
+        
+        current_tokens = self._count_text_tokens(logs)
+        if current_tokens <= max_tokens:
+            return logs
+        
+        lines = logs.split('\n')
+        if not lines:
+            return logs
+        
+        truncated_lines = []
+        running_tokens = 0
+        
+        truncation_msg = "[... earlier logs truncated due to token limit]"
+        truncation_tokens = self._count_text_tokens(truncation_msg)
+        available_tokens = max_tokens - truncation_tokens
+        
+        for line in reversed(lines):
+            line_tokens = self._count_text_tokens(line + '\n')
+            if running_tokens + line_tokens > available_tokens:
+                break
+            truncated_lines.insert(0, line)
+            running_tokens += line_tokens
+        
+        if len(truncated_lines) < len(lines):
+            truncated_logs = truncation_msg + '\n\n' + '\n'.join(truncated_lines)
+        else:
+            truncated_logs = '\n'.join(truncated_lines)
+        
+        return truncated_logs
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get OpenAI-compatible tool definitions."""
@@ -406,7 +446,6 @@ class SupervisorTools:
         workspace_dir = args.get("workspace_dir", instance_id)
         duration_minutes = args.get("duration_minutes", 60)
         
-        # Use router to select specialist instance
         from codex_supervisor.orchestration.router import TaskRouter
         router = TaskRouter()
         routing_result = await router.route_task(task_description)
@@ -440,7 +479,6 @@ class SupervisorTools:
         success = await self.instance_manager.send_followup(instance_id, message)
         
         if success:
-            # Give codex a moment to process the followup
             await asyncio.sleep(3)
             return f"✅ Sent followup to instance '{instance_id}': {message}. Waiting 3s for processing."
         else:
@@ -471,14 +509,8 @@ class SupervisorTools:
         )
         
         # Apply token-based truncation if specified
-        if max_tokens and hasattr(self, 'context_manager'):
-            # Access context manager from the orchestrator if available
-            # For now, use a simple line-based truncation as fallback
-            lines = logs.split('\n')
-            if len(lines) > max_tokens // 10:  # Rough estimate: ~10 tokens per line
-                truncated_lines = lines[:max_tokens // 10]
-                remaining = len(lines) - len(truncated_lines)
-                logs = '\n'.join(truncated_lines) + f'\n\n[... {remaining} more lines truncated due to token limit]'
+        if max_tokens:
+            logs = self._smart_truncate_logs(logs, max_tokens)
         
         return logs
 

@@ -10,12 +10,8 @@ from datetime import datetime, timezone
 import logging
 import sys
 
-# Load environment variables from .env file if it exists
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass  # dotenv not installed, use system environment variables only
+from dotenv import load_dotenv
+load_dotenv()
 
 from .orchestration import SupervisorOrchestrator
 from .todo_generator import TodoGenerator
@@ -34,10 +30,9 @@ def setup_logging(session_dir: Path, verbose: bool = False):
         ]
     )
     
-    # Reduce noise from HTTP libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("openai").setLevel(logging.INFO)  # Keep some OpenAI logs but reduce verbosity
+    logging.getLogger("openai").setLevel(logging.INFO)
 
 def load_config(config_file: Path) -> dict:
     """Load task configuration from YAML file."""
@@ -63,12 +58,10 @@ async def main():
     
     args = parser.parse_args()
     
-    # Validate config file exists
     if not args.config_file.exists():
         print(f"❌ Config file not found: {args.config_file}")
         sys.exit(1)
     
-    # Create or resume session directory
     if args.resume_dir:
         session_dir = args.resume_dir
         if not session_dir.exists():
@@ -83,7 +76,6 @@ async def main():
     
     setup_logging(session_dir, args.verbose)
     
-    # Load configuration
     try:
         config = load_config(args.config_file)
         print(f"✅ Loaded configuration from {args.config_file}")
@@ -91,7 +83,6 @@ async def main():
         logging.error(f"Failed to load config: {e}")
         sys.exit(1)
     
-    # Validate API key
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("❌ OPENROUTER_API_KEY environment variable is required")
@@ -99,39 +90,31 @@ async def main():
         sys.exit(1)
     print("✅ OpenRouter API key found")
     
-    # Determine supervisor model (CLI arg > env var > default)
     supervisor_model = args.supervisor_model or os.getenv("SUPERVISOR_MODEL", "o3")
     print(f"🤖 Using supervisor model: {supervisor_model}")
     
-    # Show benchmark mode status
     if args.benchmark_mode:
         print("🏁 BENCHMARK MODE ENABLED - Triage process will be skipped")
     else:
         print("🔍 Normal mode - Vulnerabilities will go through triage process")
     
-    # Resolve codex binary path to absolute path
     codex_binary_path = Path(args.codex_binary).resolve()
     if not codex_binary_path.exists():
         print(f"❌ Codex binary not found: {codex_binary_path}")
         sys.exit(1)
     print(f"✅ Codex binary found: {codex_binary_path}")
     
-    # Generate initial TODOs if this is a new session
     todo_file = session_dir / "supervisor_todo.json"
     if not args.resume_dir and not todo_file.exists():
         print("🎯 Generating initial TODO list from configuration...")
         try:
-            # Convert config to string format for TODO generation
             config_content = yaml.dump(config, default_flow_style=False)
             
-            # Generate TODOs using Claude
             todo_generator = TodoGenerator(api_key)
             initial_todos = await todo_generator.generate_todos_from_config(config_content)
             
-            # Save TODOs to session directory
             await todo_generator.save_todos_to_file(initial_todos, todo_file)
             
-            # Count total todos (including subtasks)
             def count_all_todos(todos):
                 total = len(todos)
                 for todo in todos:
@@ -150,7 +133,6 @@ async def main():
     else:
         print("📝 TODO file already exists, skipping generation")
     
-    # Create and run orchestrator
     orchestrator = SupervisorOrchestrator(
         config=config,
         session_dir=session_dir,
@@ -161,7 +143,6 @@ async def main():
         benchmark_mode=args.benchmark_mode
     )
     
-    # Create a task for the orchestrator
     main_task = None
     
     def signal_handler():
@@ -170,14 +151,12 @@ async def main():
         if main_task and not main_task.done():
             main_task.cancel()
     
-    # Register signal handlers
     if hasattr(signal, 'SIGTERM'):
         signal.signal(signal.SIGTERM, lambda s, f: signal_handler())
     if hasattr(signal, 'SIGINT'):
         signal.signal(signal.SIGINT, lambda s, f: signal_handler())
     
     try:
-        # Run the orchestrator in a task so we can cancel it
         main_task = asyncio.create_task(orchestrator.run_loop())
         await main_task
         print("✅ Supervisor completed successfully")
@@ -191,7 +170,6 @@ async def main():
         logging.error(f"Supervisor error: {e}")
         raise
     finally:
-        # Always cleanup
         await orchestrator.shutdown()
 
 def cli_main():

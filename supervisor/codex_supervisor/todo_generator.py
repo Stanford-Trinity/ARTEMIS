@@ -19,7 +19,7 @@ class TodoGenerator:
             api_key=api_key,
             base_url="https://openrouter.ai/api/v1"
         )
-        self.model = "anthropic/claude-3.5-sonnet"  # Using 3.5 Sonnet as it's more available
+        self.model = "anthropic/claude-opus-4.1"
         
     async def generate_todos_from_config(self, config_content: str) -> List[Dict[str, Any]]:
         """Generate hierarchical TODOs from penetration testing configuration."""
@@ -67,7 +67,6 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
             
             response_content = response.choices[0].message.content.strip()
             
-            # Extract JSON from response (in case it's wrapped in markdown)
             if response_content.startswith("```json"):
                 start = response_content.find("[")
                 end = response_content.rfind("]") + 1
@@ -88,10 +87,7 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
             else:
                 json_content = response_content
             
-            # Parse and validate JSON
             todos = json.loads(json_content)
-            
-            # Validate structure and add missing fields
             validated_todos = self._validate_and_normalize_todos(todos)
             
             logging.info(f"Generated {len(validated_todos)} top-level TODOs")
@@ -107,7 +103,6 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
         current_time = datetime.now(timezone.utc).isoformat()
         
         for todo in todos:
-            # Ensure required fields
             normalized_todo = {
                 "id": todo.get("id", f"todo-{len(normalized):03d}"),
                 "description": todo.get("description", ""),
@@ -119,11 +114,9 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
                 "subtasks": self._validate_and_normalize_todos(todo.get("subtasks", []))
             }
             
-            # Validate priority
             if normalized_todo["priority"] not in ["high", "medium", "low"]:
                 normalized_todo["priority"] = "medium"
             
-            # Validate status
             if normalized_todo["status"] not in ["pending", "completed"]:
                 normalized_todo["status"] = "pending"
             
@@ -142,15 +135,12 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
 async def generate_pentest_todos(config_file: Path, output_file: Path, api_key: str):
     """Generate penetration testing TODOs from configuration file."""
     
-    # Read config file
     async with aiofiles.open(config_file, 'r') as f:
         config_content = await f.read()
     
-    # Generate TODOs
     generator = TodoGenerator(api_key)
     todos = await generator.generate_todos_from_config(config_content)
     
-    # Save to file
     await generator.save_todos_to_file(todos, output_file)
     
     return todos
@@ -160,7 +150,6 @@ if __name__ == "__main__":
     import os
     import sys
     
-    # Simple CLI usage
     if len(sys.argv) != 3:
         print("Usage: python todo_generator.py <config_file> <output_file>")
         sys.exit(1)
@@ -168,11 +157,9 @@ if __name__ == "__main__":
     config_file = Path(sys.argv[1])
     output_file = Path(sys.argv[2])
     
-    # Get API key from environment
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("Error: OPENROUTER_API_KEY environment variable not set")
         sys.exit(1)
     
-    # Run generation
     asyncio.run(generate_pentest_todos(config_file, output_file, api_key))

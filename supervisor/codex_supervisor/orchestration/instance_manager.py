@@ -26,13 +26,10 @@ class InstanceManager:
             logging.warning(f"Instance {instance_id} already exists")
             return False
         
-        # Prepare workspace directory (simplified structure)
-        # Extract basename to prevent nested paths when LLM passes full paths
         workspace_name = Path(workspace_dir).name
         workspace_path = self.session_dir / "workspaces" / workspace_name
         workspace_path.mkdir(parents=True, exist_ok=True)
         
-        # Build codex command - logs go directly in workspace, no separate log dir
         cmd = [
             self.codex_binary,
             "exec",
@@ -44,19 +41,15 @@ class InstanceManager:
             "-C", str(workspace_path),
         ]
         
-        # Add model if specified in environment
         subagent_model = os.getenv("SUBAGENT_MODEL")
         if subagent_model:
             cmd.extend(["--model", subagent_model])
         
-        # Add specialist mode
         cmd.extend(["--mode", specialist])
             
         cmd.append(task_description)
         
         try:
-            # Start the codex process in its own process group for proper cleanup
-            # Pass through environment variables including API keys
             env = os.environ.copy()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -67,20 +60,18 @@ class InstanceManager:
                 preexec_fn=os.setsid if hasattr(os, 'setsid') else None
             )
             
-            # Store instance info
             self.instances[instance_id] = {
                 "process": process,
                 "task": task_description,
                 "workspace_dir": workspace_name,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "duration_minutes": duration_minutes,
-                "log_dir": workspace_path,  # Logs go directly in workspace now
+                "log_dir": workspace_path,
                 "status": "running"
             }
             
             logging.info(f"🚀 Spawned codex instance {instance_id} (PID: {process.pid})")
             
-            # Start monitoring task
             asyncio.create_task(self._monitor_instance(instance_id))
             
             return True
@@ -98,7 +89,6 @@ class InstanceManager:
         process = instance["process"]
         
         try:
-            # Force kill immediately - no graceful termination
             if process.returncode is None:
                 logging.info(f"🛑 Force killing instance {instance_id} (PID: {process.pid})")
                 
@@ -108,10 +98,8 @@ class InstanceManager:
                     else:
                         process.kill()
                 except ProcessLookupError:
-                    # Process already dead
                     pass
                 
-                # Brief wait for process to die
                 try:
                     await asyncio.wait_for(process.wait(), timeout=1.0)
                 except asyncio.TimeoutError:
@@ -130,7 +118,6 @@ class InstanceManager:
         active = {}
         for instance_id, info in self.instances.items():
             if info["status"] == "running":
-                # Update status based on process state
                 process = info["process"]
                 if process.returncode is not None:
                     info["status"] = "completed" if process.returncode == 0 else "failed"
@@ -151,11 +138,9 @@ class InstanceManager:
         duration_minutes = instance["duration_minutes"]
         
         try:
-            # Wait for process completion or timeout
             timeout_seconds = duration_minutes * 60
             await asyncio.wait_for(process.wait(), timeout=timeout_seconds)
             
-            # Process completed naturally
             if process.returncode == 0:
                 instance["status"] = "completed"
                 logging.info(f"✅ Instance {instance_id} completed successfully")
@@ -163,7 +148,6 @@ class InstanceManager:
                 instance["status"] = "failed"
                 logging.error(f"❌ Instance {instance_id} failed with exit code {process.returncode}")
                 
-                # Capture stderr for debugging (stdout removed to reduce noise)
                 try:
                     stdout, stderr = await process.communicate()
                     if stderr:
@@ -172,7 +156,6 @@ class InstanceManager:
                     logging.error(f"❌ Failed to read process output for {instance_id}: {e}")
                 
         except asyncio.TimeoutError:
-            # Instance exceeded time limit
             logging.warning(f"⏰ Instance {instance_id} exceeded {duration_minutes}min limit, terminating")
             await self.terminate_instance(instance_id)
             instance["status"] = "timeout"
@@ -190,7 +173,6 @@ class InstanceManager:
         if instance["status"] != "running":
             return False
         
-        # Codex looks for followup in its nested logs directory, same as status.json
         workspace_dir = instance.get("workspace_dir", instance_id)
         session_id = self.session_dir.name
         actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
@@ -208,7 +190,6 @@ class InstanceManager:
         }
         
         try:
-            # Ensure the directory exists
             logging.info(f"🔧 Creating directory: {actual_log_dir}")
             actual_log_dir.mkdir(parents=True, exist_ok=True)
             
@@ -216,7 +197,6 @@ class InstanceManager:
             async with aiofiles.open(followup_file, 'w') as f:
                 await f.write(json.dumps(followup_data, indent=2))
             
-            # Verify file was created
             if followup_file.exists():
                 file_size = followup_file.stat().st_size
                 logging.info(f"✅ Followup file created successfully: {followup_file} ({file_size} bytes)")
@@ -251,13 +231,11 @@ class InstanceManager:
                         status_data = json.loads(await f.read())
                     
                     if status_data.get("status") == "waiting_for_followup":
-                        # Read the latest conversation to get the response
                         final_result_file = instance_log_dir / "final_result.json"
                         if final_result_file.exists():
                             async with aiofiles.open(final_result_file, 'r') as f:
                                 final_result = json.loads(await f.read())
                             
-                            # Get the last assistant message from the conversation array
                             conversation = final_result.get("conversation", [])
                             for msg in reversed(conversation):
                                 if msg.get("role") == "assistant":

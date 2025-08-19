@@ -19,17 +19,14 @@ class ContextManager:
                  summarization_model: str = "openai/o4-mini"):
         self.max_tokens = max_tokens
         self.buffer_tokens = buffer_tokens
-        # Allow model override from environment
         self.summarization_model = os.getenv("SUMMARIZATION_MODEL", summarization_model)
         
-        # Initialize tokenizer using o200k_base (same as existing Codex implementation)
         try:
             self.tokenizer = tiktoken.get_encoding("o200k_base")
         except KeyError:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         
         
-        # OpenRouter client for summarization
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
             api_key=os.getenv("OPENROUTER_API_KEY")
@@ -42,17 +39,14 @@ class ContextManager:
         total_tokens = 0
         
         for message in messages:
-            # Count tokens for role and content
             total_tokens += len(self.tokenizer.encode(message.get("role", "")))
             total_tokens += len(self.tokenizer.encode(message.get("content", "")))
             
-            # Count tokens for tool calls if present
             if "tool_calls" in message:
                 for tool_call in message["tool_calls"]:
                     total_tokens += len(self.tokenizer.encode(tool_call.get("function", {}).get("name", "")))
                     total_tokens += len(self.tokenizer.encode(tool_call.get("function", {}).get("arguments", "")))
             
-            # Count tokens for tool_call_id if present
             if "tool_call_id" in message:
                 total_tokens += len(self.tokenizer.encode(message["tool_call_id"]))
         
@@ -69,12 +63,10 @@ class ContextManager:
         if len(messages) <= preserve_recent + 2:  # +2 for system message and initial user message
             return messages
         
-        # Keep system message, initial user message (with task config), and recent messages
         system_message = messages[0] if messages and messages[0]["role"] == "system" else None
         initial_user_message = None
         
-        # Find the first user message (contains task configuration)
-        for i, msg in enumerate(messages[1:], 1):  # Start from index 1, skip system message
+        for i, msg in enumerate(messages[1:], 1):
             if msg.get("role") == "user":
                 initial_user_message = msg
                 initial_user_idx = i
@@ -82,44 +74,35 @@ class ContextManager:
         
         recent_messages = messages[-preserve_recent:]
         
-        # Messages to summarize (excluding system, initial user, and recent)
         start_idx = initial_user_idx + 1 if initial_user_message else (1 if system_message else 0)
         messages_to_summarize = messages[start_idx:-preserve_recent] if preserve_recent > 0 else messages[start_idx:]
         
-        # Don't summarize if initial user message is already in recent messages
         if initial_user_message and initial_user_message in recent_messages:
             initial_user_message = None  # Don't duplicate it
         
         if not messages_to_summarize:
             return messages
         
-        # Convert messages to text context (similar to existing Codex implementation)
         context_text = self._format_messages_for_summary(messages_to_summarize)
         
-        # Use existing Codex summarization approach
         original_tokens = self.count_tokens(messages)
         logging.info(f"🔄 Context too long ({original_tokens:,} tokens), summarizing...")
         
         summary_content = await self._get_summary(context_text)
         
-        # Build new conversation history
         new_messages = []
         
-        # Always preserve system message
         if system_message:
             new_messages.append(system_message)
         
-        # Preserve initial user message with task configuration
         if initial_user_message:
             new_messages.append(initial_user_message)
         
-        # Add summary as a user message (following Codex pattern)
         new_messages.append({
             "role": "user",
             "content": summary_content
         })
         
-        # Add recent messages
         new_messages.extend(recent_messages)
         
         new_tokens = self.count_tokens(new_messages)
@@ -140,7 +123,6 @@ class ContextManager:
             elif role == "assistant":
                 formatted_lines.append(f"ASSISTANT: {content}")
                 
-                # Add tool calls if present
                 if "tool_calls" in msg:
                     for tool_call in msg["tool_calls"]:
                         func_name = tool_call.get("function", {}).get("name", "")
@@ -168,7 +150,6 @@ class ContextManager:
             
         except Exception as e:
             logging.error(f"❌ ContextManager: Summarization failed: {type(e).__name__}: {e}")
-            # Fallback summary
             return f"## Session Summary\nPrevious conversation context has been truncated due to length. {len(context.split())} words of supervisor activity occurred before this point."
 
     
