@@ -342,11 +342,18 @@ class TriageTools:
         workspace_dir = args["workspace_dir"]
         duration_minutes = args.get("duration_minutes", 30)
         
+        # Use router to select specialist instance
+        from ..orchestration.router import TaskRouter
+        router = TaskRouter()
+        routing_result = await router.route_task(task_description)
+        specialist = routing_result["specialist"]
+        
         success = await self.instance_manager.spawn_instance(
             instance_id=instance_id,
             task_description=task_description,
             workspace_dir=workspace_dir,
-            duration_minutes=duration_minutes
+            duration_minutes=duration_minutes,
+            specialist=specialist
         )
         
         if success:
