@@ -1,74 +1,76 @@
-📧 Vulnerability Disclosure Email Template (Fill-In for Agent)
+📧 Vulnerability Disclosure Email Template (Friendly Tone)
 
 Instruction:
-Given the vulnerability context that follows this prompt, draft a professional, coordinated disclosure email to the vendor’s security contact. Ensure clarity, technical accuracy, and responsible disclosure tone. Redact sensitive internal details (e.g., IPs, client identifiers).
+Given the vulnerability context that follows this prompt, draft a vendor disclosure email using the structure below. Keep the tone cooperative, respectful, and focused on helping the vendor fix the issue.
 
 ⸻
 
 Email Fields to Fill
 
 1. Subject Line
-Security Vulnerability Disclosure: [Product] [Short Summary of Issue]
+Security Issue Reported in [Product] – [Short Summary]
 
 ⸻
 
 2. Greeting
-	•	Preferred: “Dear [Vendor Security Team / Product Security Team / [Contact Name]],”
+	•	Example:
+	•	“Hi [Vendor Security Team / Product Team],”
+	•	“Hello [Contact Name],”
 
 ⸻
 
 3. Introduction
-State who is reporting and under what context:
-	•	Reporter: Project Trinity (Agent)
+	•	Who is reporting: Project Trinity (Agent)
 	•	Contact: trinity-research@lists.stanford.edu
-	•	Purpose: Reporting under responsible disclosure guidelines.
+	•	Context: emphasize responsible disclosure and willingness to collaborate.
+	•	Example:
+“We’re reaching out to let you know about a security issue we discovered in [Product]. We’re sharing this under responsible disclosure guidelines and want to work with you on remediation.”
 
 ⸻
 
 4. Vulnerability Summary
-	•	Product: [fill from context]
-	•	Version(s): [fill from context]
-	•	Vulnerability Type: [e.g., Incorrect Access Control, Insecure Permissions]
-	•	Attack Type: [Remote / Local / Physical / Context-dependent]
-	•	Impact: [Code Execution, Information Disclosure, etc.]
-	•	Severity Estimate: [Low / Medium / High / Critical; optional CVSS if known]
+	•	Product: [fill in]
+	•	Version(s): [fill in]
+	•	Vulnerability Type: [fill in]
+	•	Attack Type: [Local / Remote / Physical / Context-dependent]
+	•	Impact: [fill in]
+	•	Severity: [Low / Medium / High / Critical]
 
 ⸻
 
 5. Technical Details
-Provide a concise description with enough info for vendor reproduction:
-	•	Affected Components: [e.g., SMB share, JSON-RPC API]
-	•	Attack Vector: [step-by-step exploitation path]
-	•	Root Cause: [default creds, insecure configuration, etc.]
-	•	Result: [RCE as root, data disclosure, etc.]
+	•	Concise description of how the issue occurs.
+	•	Key components or configuration involved.
+	•	Impact if exploited.
+	•	Keep clear and step-based where possible.
 
 ⸻
 
 6. Proof of Concept (Optional)
-[Summarize reproduction steps; include commands or HTTP requests if safe to share.]
+	•	[Fill in commands, requests, or reproduction steps — simplified if possible.]
 
 ⸻
 
-7. Suggested Mitigations
-[Practical fixes the vendor could implement, e.g., disable guest SMB write, enforce credential change, restrict API access.]
+7. Suggested Fixes / Mitigations
+	•	[Fill in actionable recommendations, e.g., enforce credential change, remove insecure defaults, restrict access.]
 
 ⸻
 
-8. Coordination & Disclosure Timeline
-“We are following responsible disclosure practices. We would like to coordinate with you on remediation. Our proposed timeline is:
-	•	Initial report: [Date]
-	•	Vendor acknowledgement requested: [~7 days]
-	•	Patch development window: [e.g., 30–90 days]
-	•	Public disclosure: [Date or ‘upon vendor patch release’]
-
-If you have a preferred timeline, please let us know.”
+8. Coordination & Timeline
+	•	Suggested friendly disclosure timeline:
+	•	Report date: [today’s date]
+	•	Acknowledgement: ~7 days
+	•	Patch window: 30–90 days
+	•	Disclosure: on patch release or agreed date
+	•	Phrase it collaboratively:
+“We usually suggest the following timeline, but we’re happy to adjust if you have a preferred process.”
 
 ⸻
 
 9. Closing
-Polite, cooperative close. Example:
+Polite and encouraging:
 
-“We look forward to working with you on addressing this issue. Please confirm receipt of this report and let us know if you require additional information.”
+“Thanks for taking the time to review this report. Please confirm receipt, and let us know if you’d like more details or testing help.”
 
 Signature:
 Project Trinity (Agent)
