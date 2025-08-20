@@ -1,9 +1,9 @@
 use anyhow::Context;
 use clap::Parser;
-use codex_cli::login::run_login_with_chatgpt;
-use codex_cli::proto;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::run_login_with_chatgpt;
+use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
@@ -111,6 +111,14 @@ struct AutonomousCommand {
     #[clap(long)]
     ignore_work_hours: bool,
 
+    /// Custom logs directory (overrides default autonomous_session_* naming).
+    #[clap(long, value_name = "DIR")]
+    logs_dir: Option<PathBuf>,
+
+    /// Mode/specialist to use for the codex instance.
+    #[clap(long, value_name = "MODE")]
+    mode: Option<String>,
+
     #[clap(flatten)]
     config_overrides: CliConfigOverrides,
 }
@@ -177,93 +185,13 @@ async fn run_autonomous_mode(
     autonomous_cli: AutonomousCommand,
     _codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    use chrono::{DateTime, Timelike, Utc};
-    use chrono_tz::US::Pacific;
     use codex_core::codex_wrapper::init_codex;
     use codex_core::config::Config;
-    use codex_core::protocol::{InputItem, Op};
-    use std::time::{Duration, Instant};
+    use codex_core::protocol::InputItem;
+    use codex_core::protocol::Op;
+    use std::time::Duration;
+    use std::time::Instant;
     use tokio::time::sleep;
-
-    // Helper functions for work hours
-    let is_outside_work_hours = |start_hour: u8, end_hour: u8| -> bool {
-        let now_pacific = Utc::now().with_timezone(&Pacific);
-        let current_hour = now_pacific.hour() as u8;
-
-        if start_hour <= end_hour {
-            // Normal case: 9-17 (current < start OR current >= end)
-            current_hour < start_hour || current_hour >= end_hour
-        } else {
-            // Overnight case: 22-6 (current >= end AND current < start)
-            current_hour >= end_hour && current_hour < start_hour
-        }
-    };
-
-    let calculate_next_work_time = |start_hour: u8, end_hour: u8| -> DateTime<chrono_tz::Tz> {
-        let now_pacific = Utc::now().with_timezone(&Pacific);
-        let current_hour = now_pacific.hour() as u8;
-
-        if start_hour <= end_hour {
-            // Normal case: 9-17
-            if current_hour < start_hour {
-                // Same day, wait until start hour
-                now_pacific
-                    .date_naive()
-                    .and_hms_opt(start_hour as u32, 0, 0)
-                    .unwrap()
-                    .and_local_timezone(Pacific)
-                    .unwrap()
-            } else {
-                // Next day at start hour
-                (now_pacific.date_naive() + chrono::Duration::days(1))
-                    .and_hms_opt(start_hour as u32, 0, 0)
-                    .unwrap()
-                    .and_local_timezone(Pacific)
-                    .unwrap()
-            }
-        } else {
-            // Overnight case: 22-6
-            if current_hour >= start_hour {
-                // Continue tonight until end hour (next day)
-                (now_pacific.date_naive() + chrono::Duration::days(1))
-                    .and_hms_opt(end_hour as u32, 0, 0)
-                    .unwrap()
-                    .and_local_timezone(Pacific)
-                    .unwrap()
-            } else if current_hour < end_hour {
-                // Already in work hours (after midnight)
-                now_pacific
-            } else {
-                // Wait until start hour today
-                now_pacific
-                    .date_naive()
-                    .and_hms_opt(start_hour as u32, 0, 0)
-                    .unwrap()
-                    .and_local_timezone(Pacific)
-                    .unwrap()
-            }
-        }
-    };
-
-    let sleep_until_work_hours = |target_time: DateTime<chrono_tz::Tz>| async move {
-        loop {
-            let now_pacific = Utc::now().with_timezone(&Pacific);
-            if now_pacific >= target_time {
-                break;
-            }
-
-            let sleep_duration = std::cmp::min(
-                (target_time - now_pacific).num_seconds(),
-                300, // Max 5 minutes between checks
-            ) as u64;
-
-            println!(
-                "😴 Sleeping for {} seconds until work hours resume...",
-                sleep_duration
-            );
-            tokio::time::sleep(Duration::from_secs(sleep_duration)).await;
-        }
-    };
 
     println!("🚀 Starting autonomous mode...");
     println!("📁 Config file: {:?}", autonomous_cli.config_file);
@@ -348,6 +276,11 @@ async fn run_autonomous_mode(
             });
     }
 
+    // Set specialist mode if provided
+    if let Some(mode) = autonomous_cli.mode {
+        config_overrides.specialist = Some(mode);
+    }
+
     let config = Config::load_with_cli_overrides(
         autonomous_cli
             .config_overrides
@@ -356,6 +289,29 @@ async fn run_autonomous_mode(
         config_overrides,
     )
     .with_context(|| "Failed to load codex config")?;
+
+    // Debug: Log the actual config being used
+    println!(
+        "🔧 DEBUG: Loaded config - model: {}, provider: {}",
+        config.model, config.model_provider.name
+    );
+    println!("🔧 DEBUG: Driver model: {}", autonomous_cli.driver_model);
+    println!(
+        "🔧 DEBUG: OPENROUTER_API_KEY: {}",
+        if std::env::var("OPENROUTER_API_KEY").is_ok() {
+            "SET"
+        } else {
+            "NOT SET"
+        }
+    );
+    println!(
+        "🔧 DEBUG: OPENAI_API_KEY: {}",
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            "SET"
+        } else {
+            "NOT SET"
+        }
+    );
 
     // Initialize codex session
     let (codex, _init_event, _ctrl_c) = init_codex(config.clone()).await?;
@@ -409,7 +365,7 @@ async fn run_autonomous_mode(
         println!("✅ Resuming from iteration {}", iteration);
     }
     let start_time = Instant::now();
-    let duration = Duration::from_secs(autonomous_cli.duration * 60);
+    let _duration = Duration::from_secs(autonomous_cli.duration * 60);
 
     // Create or use existing session-specific logs directory
     let session_timestamp = std::time::SystemTime::now()
@@ -420,6 +376,15 @@ async fn run_autonomous_mode(
     let session_logs_dir = if let Some(ref resume_dir) = autonomous_cli.resume_dir {
         // Use existing directory for resume
         resume_dir.clone()
+    } else if let Some(ref custom_logs_dir) = autonomous_cli.logs_dir {
+        // Use custom logs directory (for vulnerability deep-dives)
+        std::fs::create_dir_all(&custom_logs_dir).with_context(|| {
+            format!(
+                "Failed to create custom logs directory: {:?}",
+                custom_logs_dir
+            )
+        })?;
+        custom_logs_dir.clone()
     } else {
         // Create new session directory with timestamp
         let session_logs_dir =
@@ -588,8 +553,9 @@ async fn run_autonomous_mode(
     );
 
     // Main autonomous loop with error handling
+    let session_finished = false;
     let loop_result = async {
-        while start_time.elapsed() < duration {
+        while !session_finished {
             iteration += 1;
             println!(
                 "\n🔄 Iteration {} ({}s elapsed)",
@@ -658,7 +624,7 @@ async fn run_autonomous_mode(
             // Handle supervisor LLM tool calls and generate final user prompt
             let final_user_prompt = if !tool_results.is_empty() {
                 // Case 2: Supervisor made tool calls - need to get follow-up response
-                
+
                 // Add user message with tool calls to conversation log
                 conversation_log.push(serde_json::json!({
                     "role": "user",
@@ -688,11 +654,11 @@ async fn run_autonomous_mode(
                 }
 
                 // Generate follow-up prompt from supervisor with tool results
-                let follow_up_context = format!("{}\n\nTool Results:\n{}", 
-                    final_context, 
+                let follow_up_context = format!("{}\n\nTool Results:\n{}",
+                    final_context,
                     serde_json::to_string_pretty(&tool_results).unwrap_or_default()
                 );
-                
+
                 let follow_up_driver_prompt = inject_template_variables(
                     &continuation_prompt_template,
                     &config_content,
@@ -714,13 +680,13 @@ async fn run_autonomous_mode(
                 }));
 
                 // Update context with follow-up conversation
-                final_context = format!("{}\n\nUSER: {}\n\nASSISTANT: {}", 
+                final_context = format!("{}\n\nUSER: {}\n\nASSISTANT: {}",
                     final_context, follow_up_prompt, follow_up_prompt);
 
                 follow_up_prompt
             } else {
                 // Case 1: No tool calls - use original supervisor message directly
-                
+
                 // Add regular user message to conversation log
                 conversation_log.push(serde_json::json!({
                     "role": "user",
@@ -815,7 +781,7 @@ async fn run_autonomous_mode(
                                     tool_call.get("type").and_then(|t| t.as_str()) != Some("system")
                                 })
                                 .collect();
-                            
+
                             if !filtered_tool_calls.is_empty() {
                                 readable_context.push_str(&format!(
                                     "ASSISTANT_TOOL_CALLS: {}\n\n",
@@ -857,44 +823,6 @@ async fn run_autonomous_mode(
             // Save checkpoint after each iteration
             save_checkpoint(&conversation_log, iteration as u32);
 
-            // Check if we should pause for work hours (unless disabled)
-            if !autonomous_cli.ignore_work_hours
-                && is_outside_work_hours(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour)
-            {
-                let next_work_time = calculate_next_work_time(autonomous_cli.work_start_hour, autonomous_cli.work_end_hour);
-                println!("⏸️  Outside work hours ({}:00-{}:00 Pacific). Pausing until {}", 
-                    autonomous_cli.work_start_hour, autonomous_cli.work_end_hour, 
-                    next_work_time.format("%Y-%m-%d %H:%M %Z"));
-                
-                // Update heartbeat to show paused status
-                let paused_heartbeat = serde_json::json!({
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "iteration": iteration,
-                    "session_timestamp": session_timestamp,
-                    "elapsed_seconds": start_time.elapsed().as_secs(),
-                    "status": "paused",
-                    "resume_time": next_work_time.to_rfc3339(),
-                    "pid": std::process::id(),
-                    "config_file": autonomous_cli.config_file.to_string_lossy(),
-                    "duration_minutes": autonomous_cli.duration,
-                    "driver_model": &autonomous_cli.driver_model,
-                    "full_auto": autonomous_cli.full_auto
-                });
-                
-                let paused_heartbeat_json = serde_json::to_string_pretty(&paused_heartbeat).unwrap_or_default();
-                let global_heartbeat_path = PathBuf::from("./logs/latest_session_heartbeat.json");
-                let backup_heartbeat_path = dirs::home_dir()
-                    .unwrap_or_default()
-                    .join("codex-logs-backup")
-                    .join("latest_session_heartbeat.json");
-                
-                let _ = std::fs::write(&global_heartbeat_path, &paused_heartbeat_json);
-                let _ = std::fs::write(&backup_heartbeat_path, &paused_heartbeat_json);
-                
-                sleep_until_work_hours(next_work_time).await;
-                
-                println!("▶️  Work hours resumed. Continuing autonomous mode...");
-            }
 
             // Wait before next iteration
             sleep(Duration::from_secs(10)).await;
@@ -1418,7 +1346,7 @@ fn inject_template_variables(template: &str, config_yaml: &str, context: &str) -
         .replace("{context}", context)
 }
 
-fn inject_approval_variables(
+fn _inject_approval_variables(
     template: &str,
     command: &[String],
     cwd: &std::path::Path,
@@ -1568,19 +1496,23 @@ async fn generate_user_prompt(
 ) -> anyhow::Result<(String, Vec<serde_json::Value>)> {
     use codex_core::client::ModelClient;
     use codex_core::client_common::Prompt;
-    use codex_core::config_types::{ReasoningEffort, ReasoningSummary};
-    use codex_core::model_provider_info::{ModelProviderInfo, WireApi};
-    use codex_core::models::{ContentItem, FunctionCallOutputPayload, ResponseItem};
+    use codex_core::config_types::ReasoningEffort;
+    use codex_core::config_types::ReasoningSummary;
+    use codex_core::model_provider_info::ModelProviderInfo;
+    use codex_core::model_provider_info::WireApi;
+    use codex_core::models::ContentItem;
+    use codex_core::models::FunctionCallOutputPayload;
+    use codex_core::models::ResponseItem;
     use futures::StreamExt;
     use std::collections::HashMap;
 
     println!("🔄 Calling {} with driver prompt...", model);
 
-    // Create model provider info
+    // Create model provider info - use OpenRouter for consistency
     let provider = ModelProviderInfo {
-        name: "OpenAI".to_string(),
-        base_url: "https://api.openai.com/v1".to_string(),
-        env_key: Some("OPENAI_API_KEY".to_string()),
+        name: "OpenRouter".to_string(),
+        base_url: "https://openrouter.ai/api/v1".to_string(),
+        env_key: Some("OPENROUTER_API_KEY".to_string()),
         env_key_instructions: None,
         wire_api: WireApi::Chat,
         query_params: None,
@@ -1594,6 +1526,7 @@ async fn generate_user_prompt(
         provider,
         ReasoningEffort::Medium,
         ReasoningSummary::None,
+        None, // No specialist for driver model
     );
 
     // Create prompt with driver prompt as user message
@@ -1676,6 +1609,28 @@ async fn generate_user_prompt(
         },
     );
 
+    // Tool to finish the autonomous session
+    extra_tools.insert(
+        "finished".to_string(),
+        mcp_types::Tool {
+            name: "finished".to_string(),
+            description: Some(
+                "Mark the autonomous session as finished and exit the loop".to_string(),
+            ),
+            annotations: None,
+            input_schema: mcp_types::ToolInputSchema {
+                r#type: "object".to_string(),
+                properties: Some(serde_json::json!({
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for finishing the session"
+                    }
+                })),
+                required: Some(vec!["reason".to_string()]),
+            },
+        },
+    );
+
     let prompt = Prompt {
         input: vec![user_message.clone()],
         prev_id: None,
@@ -1741,7 +1696,8 @@ async fn generate_user_prompt(
 
     // Handle tool calls
     if !tool_calls.is_empty() {
-        let tool_results = handle_supervisor_tool_calls(&tool_calls, session_logs_dir).await?;
+        let (tool_results, _finished) =
+            handle_supervisor_tool_calls(&tool_calls, session_logs_dir).await?;
 
         // Add tool calls and results to conversation and get new instruction
         let mut conversation = vec![user_message];
@@ -1842,8 +1798,9 @@ async fn generate_user_prompt(
 async fn handle_supervisor_tool_calls(
     tool_calls: &[serde_json::Value],
     session_logs_dir: &std::path::Path,
-) -> anyhow::Result<Vec<serde_json::Value>> {
+) -> anyhow::Result<(Vec<serde_json::Value>, bool)> {
     let mut tool_results = Vec::new();
+    let mut session_finished = false;
     let notes_dir = session_logs_dir.join("notes");
 
     // Ensure notes directory exists
@@ -2002,6 +1959,18 @@ async fn handle_supervisor_tool_calls(
                     }
                 }
             }
+            "finished" => {
+                let reason = arguments["reason"].as_str().unwrap_or("No reason provided");
+                println!("🏁 Session finished by driver model: {}", reason);
+
+                tool_results.push(serde_json::json!({
+                    "tool_call_id": tool_id,
+                    "tool_name": tool_name,
+                    "content": format!("✅ Autonomous session finished: {}", reason)
+                }));
+
+                session_finished = true;
+            }
             _ => {
                 tool_results.push(serde_json::json!({
                     "tool_call_id": tool_id,
@@ -2012,7 +1981,7 @@ async fn handle_supervisor_tool_calls(
         }
     }
 
-    Ok(tool_results)
+    Ok((tool_results, session_finished))
 }
 
 /// Prepend root-level overrides so they have lower precedence than

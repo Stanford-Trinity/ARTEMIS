@@ -590,6 +590,7 @@ async fn submission_loop(
                     provider.clone(),
                     model_reasoning_effort,
                     model_reasoning_summary,
+                    config.specialist.clone(),
                 );
 
                 // abort any current running session and clone its state
@@ -1297,7 +1298,7 @@ async fn handle_function_call(
                     ResponseInputItem::FunctionCallOutput {
                         call_id,
                         output: FunctionCallOutputPayload {
-                            content: format!("unsupported call: {}", name),
+                            content: format!("unsupported call: {name}"),
                             success: None,
                         },
                     }
@@ -1489,8 +1490,7 @@ async fn handle_sandbox_error(
             call_id,
             output: FunctionCallOutputPayload {
                 content: format!(
-                    "failed in sandbox {:?} with execution error: {error}",
-                    sandbox_type
+                    "failed in sandbox {sandbox_type:?} with execution error: {error}"
                 ),
                 success: Some(false),
             },

@@ -1,5 +1,6 @@
 mod cli;
 mod event_processor;
+mod realtime_logger;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -20,6 +21,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
+use realtime_logger::RealtimeLogger;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -36,6 +38,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         skip_git_repo_check,
         color,
         last_message_file,
+        log_session_dir,
+        instance_id,
+        wait_for_followup,
+        mode,
         prompt,
         config_overrides,
     } = cli;
@@ -94,7 +100,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
-        model,
+        model: model.clone(),
         config_profile,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
@@ -103,6 +109,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
         model_provider: None,
         codex_linux_sandbox_exe,
+        specialist: Some(mode.to_string()),
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -139,9 +146,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .try_init();
 
-    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config).await?;
+    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config.clone()).await?;
     let codex = Arc::new(codex_wrapper);
     info!("Codex initialized with event: {event:?}");
+
+    // Initialize real-time logger if requested
+    let realtime_logger = if let Some(ref log_dir) = log_session_dir {
+        let instance_id_str = instance_id
+            .clone()
+            .unwrap_or_else(|| format!("codex_{}", std::process::id()));
+        Some(Arc::new(RealtimeLogger::new(
+            log_dir.clone(),
+            instance_id_str,
+            &prompt,
+            model.clone(),
+            config.specialist.clone(),
+        )?))
+    } else {
+        None
+    };
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     {
@@ -203,21 +226,101 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     // Send the prompt.
-    let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
-    let initial_prompt_task_id = codex.submit(Op::UserInput { items }).await?;
-    info!("Sent prompt with event ID: {initial_prompt_task_id}");
+    let mut current_prompt = prompt;
+    let mut message_index = 0;
 
-    // Run the loop until the task is complete.
-    while let Some(event) = rx.recv().await {
-        let (is_last_event, last_assistant_message) = match &event.msg {
-            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
-                (true, last_agent_message.clone())
+    loop {
+        let items: Vec<InputItem> = vec![InputItem::Text {
+            text: current_prompt.clone(),
+        }];
+        let task_id = codex.submit(Op::UserInput { items }).await?;
+        info!("Sent prompt with event ID: {task_id}");
+
+        // Run the loop until the task is complete.
+        let mut assistant_responded = false;
+        while let Some(event) = rx.recv().await {
+            let (is_last_event, last_assistant_message) = match &event.msg {
+                EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                    (true, last_agent_message.clone())
+                }
+                _ => (false, None),
+            };
+
+            // Check if this is an assistant message
+            if matches!(event.msg, EventMsg::AgentMessage(_)) {
+                assistant_responded = true;
+                message_index += 1;
             }
-            _ => (false, None),
-        };
-        event_processor.process_event(event);
-        if is_last_event {
-            handle_last_message(last_assistant_message, last_message_file.as_deref())?;
+
+            // Log event to real-time logger if enabled
+            if let Some(ref logger) = realtime_logger {
+                if let Err(e) = logger.log_event(&event).await {
+                    error!("Failed to log event to realtime logger: {e:?}");
+                }
+            }
+
+            event_processor.process_event(event);
+            if is_last_event {
+                if !wait_for_followup {
+                    handle_last_message(last_assistant_message, last_message_file.as_deref())?;
+                    return Ok(());
+                }
+                break;
+            }
+        }
+
+        // If we're in followup mode and assistant responded, wait for supervisor
+        if wait_for_followup && assistant_responded {
+            if let Some(ref log_dir) = log_session_dir {
+                let instance_id_str = instance_id
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+                match wait_for_supervisor_followup(
+                    log_dir,
+                    instance_id_str,
+                    message_index,
+                    model.as_deref(),
+                )
+                .await
+                {
+                    Ok(Some(followup)) => {
+                        current_prompt = followup;
+
+                        // Update status to indicate we're processing the followup
+                        let status_file = log_dir.join("status.json");
+                        let mut status_obj = serde_json::json!({
+                            "status": "processing",
+                            "instance_id": instance_id_str,
+                            "last_message_index": message_index,
+                            "timestamp": chrono::Utc::now().to_rfc3339()
+                        });
+
+                        // Add model information if available
+                        if let Some(ref model_name) = model {
+                            status_obj["model"] = serde_json::Value::String(model_name.to_string());
+                        }
+
+                        let status = status_obj;
+                        let _ = std::fs::write(
+                            &status_file,
+                            serde_json::to_string_pretty(&status).unwrap_or_default(),
+                        );
+                        info!("Updated status to 'processing' after receiving followup");
+
+                        continue; // Continue the loop with new prompt
+                    }
+                    Ok(None) => {
+                        info!("Supervisor terminated instance");
+                        break; // Supervisor wants us to terminate
+                    }
+                    Err(e) => {
+                        error!("Error waiting for supervisor followup: {e:?}");
+                        break;
+                    }
+                }
+            }
+        } else {
             break;
         }
     }
@@ -245,4 +348,92 @@ fn handle_last_message(
         }
     }
     Ok(())
+}
+
+async fn wait_for_supervisor_followup(
+    log_dir: &std::path::Path,
+    instance_id: &str,
+    message_index: usize,
+    model: Option<&str>,
+) -> anyhow::Result<Option<String>> {
+    use chrono::Utc;
+    use std::fs;
+    use tokio::time::Duration;
+    use tokio::time::sleep;
+
+    let status_file = log_dir.join("status.json");
+    let followup_file = log_dir.join("followup_input.json");
+
+    // Write status to indicate we're waiting for followup
+    let mut status_obj = serde_json::json!({
+        "status": "waiting_for_followup",
+        "instance_id": instance_id,
+        "last_message_index": message_index,
+        "timestamp": Utc::now().to_rfc3339()
+    });
+
+    // Add model information if available
+    if let Some(model_name) = model {
+        status_obj["model"] = serde_json::Value::String(model_name.to_string());
+    }
+
+    let status = status_obj;
+
+    fs::write(&status_file, serde_json::to_string_pretty(&status)?)?;
+    info!("Waiting for supervisor followup...");
+
+    // Poll for followup file with timeout
+    let timeout_duration = Duration::from_secs(300); // 5 minute timeout
+    let start_time = tokio::time::Instant::now();
+
+    loop {
+        // Check if followup file exists
+        if followup_file.exists() {
+            match fs::read_to_string(&followup_file) {
+                Ok(content) => {
+                    // Parse the followup JSON
+                    match serde_json::from_str::<serde_json::Value>(&content) {
+                        Ok(followup_json) => {
+                            // Remove the followup file to prepare for next iteration
+                            let _ = fs::remove_file(&followup_file);
+
+                            if let Some(message) =
+                                followup_json.get("message").and_then(|m| m.as_str())
+                            {
+                                if message.trim().is_empty() {
+                                    // Empty message means terminate
+                                    return Ok(None);
+                                } else {
+                                    // Return the followup message
+                                    return Ok(Some(message.to_string()));
+                                }
+                            } else if followup_json
+                                .get("terminate")
+                                .and_then(|t| t.as_bool())
+                                .unwrap_or(false)
+                            {
+                                // Explicit termination
+                                return Ok(None);
+                            }
+                        }
+                        Err(e) => {
+                            error!("Failed to parse followup JSON: {e:?}");
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to read followup file: {e:?}");
+                }
+            }
+        }
+
+        // Check timeout
+        if start_time.elapsed() > timeout_duration {
+            info!("Timeout waiting for supervisor followup, terminating");
+            return Ok(None);
+        }
+
+        // Sleep before next check
+        sleep(Duration::from_millis(500)).await;
+    }
 }

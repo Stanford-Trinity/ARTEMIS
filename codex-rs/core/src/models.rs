@@ -145,7 +145,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                                 .unwrap_or_else(|| "application/octet-stream".to_string());
                             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
                             Some(ContentItem::InputImage {
-                                image_url: format!("data:{};base64,{}", mime, encoded),
+                                image_url: format!("data:{mime};base64,{encoded}"),
                             })
                         }
                         Err(err) => {
@@ -180,7 +180,6 @@ pub struct ShellToolCallParams {
 #[derive(Deserialize, Debug, Clone)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
-    #[expect(dead_code)]
     pub success: Option<bool>,
 }
 

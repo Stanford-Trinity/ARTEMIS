@@ -44,6 +44,7 @@ pub struct ModelClient {
     provider: ModelProviderInfo,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
+    specialist: Option<String>,
 }
 
 impl ModelClient {
@@ -52,6 +53,7 @@ impl ModelClient {
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
+        specialist: Option<String>,
     ) -> Self {
         Self {
             model: model.to_string(),
@@ -59,6 +61,7 @@ impl ModelClient {
             provider,
             effort,
             summary,
+            specialist,
         }
     }
 
@@ -70,9 +73,14 @@ impl ModelClient {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
-                let response_stream =
-                    stream_chat_completions(prompt, &self.model, &self.client, &self.provider)
-                        .await?;
+                let response_stream = stream_chat_completions(
+                    prompt,
+                    &self.model,
+                    &self.client,
+                    &self.provider,
+                    self.specialist.as_deref(),
+                )
+                .await?;
 
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
@@ -106,7 +114,8 @@ impl ModelClient {
             return stream_from_fixture(path).await;
         }
 
-        let full_instructions = prompt.get_full_instructions(&self.model);
+        let full_instructions =
+            prompt.get_full_instructions(&self.model, self.specialist.as_deref());
         let tools_json = create_tools_json_for_responses_api(prompt, &self.model)?;
         let reasoning = create_reasoning_param_for_request(&self.model, self.effort, self.summary);
         let payload = ResponsesApiRequest {

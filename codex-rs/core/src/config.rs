@@ -63,6 +63,9 @@ pub struct Config {
     /// User-provided instructions from instructions.md.
     pub instructions: Option<String>,
 
+    /// Specialist prompt type (security, web, infrastructure, data, or None for generalist).
+    pub specialist: Option<String>,
+
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
     /// processing a user submission). The value must be the full command
@@ -315,6 +318,7 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub specialist: Option<String>,
 }
 
 impl Config {
@@ -336,6 +340,7 @@ impl Config {
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
+            specialist,
         } = overrides;
 
         let config_profile = match config_profile_key.or(cfg.profile) {
@@ -432,6 +437,7 @@ impl Config {
                 .unwrap_or(false),
             notify: cfg.notify,
             instructions,
+            specialist,
             mcp_servers: cfg.mcp_servers,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
@@ -731,6 +737,7 @@ disable_response_storage = true
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
+                specialist: None,
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
@@ -758,6 +765,7 @@ disable_response_storage = true
             fixture.codex_home(),
         )?;
         let expected_gpt3_profile_config = Config {
+            specialist: None,
             model: "gpt-3.5-turbo".to_string(),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
@@ -817,6 +825,7 @@ disable_response_storage = true
             fixture.codex_home(),
         )?;
         let expected_zdr_profile_config = Config {
+            specialist: None,
             model: "o3".to_string(),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),

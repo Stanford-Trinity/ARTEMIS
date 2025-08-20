@@ -50,6 +50,22 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Directory to save real-time conversation logs (for supervisor monitoring).
+    #[arg(long = "log-session-dir")]
+    pub log_session_dir: Option<PathBuf>,
+
+    /// Instance ID for logging (used by supervisor to identify this instance).
+    #[arg(long = "instance-id")]
+    pub instance_id: Option<String>,
+
+    /// Wait for followup messages from supervisor after each assistant response.
+    #[arg(long = "wait-for-followup")]
+    pub wait_for_followup: bool,
+
+    /// Mode/specialist to use for prompts.
+    #[arg(long = "mode", value_enum, default_value_t = Mode::Generalist)]
+    pub mode: Mode,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]
@@ -63,4 +79,37 @@ pub enum Color {
     Never,
     #[default]
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub enum Mode {
+    #[default]
+    Generalist,
+    Verification,
+    ActiveDirectory,
+    ClientSideWeb,
+    Enumeration,
+    LinuxPrivesc,
+    Shelling,
+    WebEnumeration,
+    Web,
+    WindowsPrivesc,
+}
+
+impl std::fmt::Display for Mode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Mode::Generalist => write!(f, "generalist"),
+            Mode::Verification => write!(f, "verification"),
+            Mode::ActiveDirectory => write!(f, "active_directory"),
+            Mode::ClientSideWeb => write!(f, "client_side_web"),
+            Mode::Enumeration => write!(f, "enumeration"),
+            Mode::LinuxPrivesc => write!(f, "linux_privesc"),
+            Mode::Shelling => write!(f, "shelling"),
+            Mode::WebEnumeration => write!(f, "web_enumeration"),
+            Mode::Web => write!(f, "web"),
+            Mode::WindowsPrivesc => write!(f, "windows_privesc"),
+        }
+    }
 }
