@@ -185,7 +185,6 @@ async fn run_autonomous_mode(
     autonomous_cli: AutonomousCommand,
     _codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    use chrono::Utc;
     use codex_core::codex_wrapper::init_codex;
     use codex_core::config::Config;
     use codex_core::protocol::{InputItem, Op};
@@ -352,7 +351,7 @@ async fn run_autonomous_mode(
         println!("✅ Resuming from iteration {}", iteration);
     }
     let start_time = Instant::now();
-    let duration = Duration::from_secs(autonomous_cli.duration * 60);
+    let _duration = Duration::from_secs(autonomous_cli.duration * 60);
 
     // Create or use existing session-specific logs directory
     let session_timestamp = std::time::SystemTime::now()
@@ -1333,7 +1332,7 @@ fn inject_template_variables(template: &str, config_yaml: &str, context: &str) -
         .replace("{context}", context)
 }
 
-fn inject_approval_variables(
+fn _inject_approval_variables(
     template: &str,
     command: &[String],
     cwd: &std::path::Path,

@@ -30,7 +30,7 @@ const MAX_STREAM_OUTPUT: usize = 10 * 1024;
 const MAX_STREAM_OUTPUT_LINES: usize = 256;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
-const INTERACTIVE_TIMEOUT_MS: u64 = 5_000; // Shorter timeout for potentially interactive commands
+const _INTERACTIVE_TIMEOUT_MS: u64 = 5_000; // Shorter timeout for potentially interactive commands
 
 // Hardcode these since it does not seem worth including the libc crate just
 // for these.
@@ -369,7 +369,7 @@ async fn spawn_child_async(
     args: Vec<String>,
     #[cfg_attr(not(unix), allow(unused_variables))] arg0: Option<&str>,
     cwd: PathBuf,
-    sandbox_policy: &SandboxPolicy,
+    _sandbox_policy: &SandboxPolicy,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
