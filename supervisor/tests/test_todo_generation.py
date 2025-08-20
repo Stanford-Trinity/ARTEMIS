@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+tests/test_todo_generation.py#!/usr/bin/env python3
 """
 Test script for TODO generation functionality
 """
@@ -17,11 +17,12 @@ from codex_supervisor.todo_generator import TodoGenerator
 async def test_todo_generation():
     """Test TODO generation with sample config."""
     
-    # Get API key from environment
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    # Get API key from environment with fallback
+    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("❌ OPENROUTER_API_KEY environment variable not set")
+        print("❌ Either OPENROUTER_API_KEY or OPENAI_API_KEY environment variable must be set")
         print("💡 Set it with: export OPENROUTER_API_KEY=your-key-here")
+        print("💡 Or use: export OPENAI_API_KEY=your-key-here")
         return False
     
     # Load sample config
@@ -39,7 +40,8 @@ async def test_todo_generation():
     
     try:
         # Generate TODOs
-        generator = TodoGenerator(api_key)
+        use_openrouter = bool(os.getenv("OPENROUTER_API_KEY"))
+        generator = TodoGenerator(api_key, use_openrouter)
         todos = await generator.generate_todos_from_config(config_content)
         
         # Count total todos

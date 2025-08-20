@@ -42,8 +42,7 @@ class SupervisorOrchestrator:
         
         self.context_manager = ContextManager(
             max_tokens=200_000,
-            buffer_tokens=15_000,
-            summarization_model="openai/o4-mini"
+            buffer_tokens=15_000
         )
         
         self.triage_manager = None
@@ -52,7 +51,7 @@ class SupervisorOrchestrator:
                 session_dir=session_dir,
                 task_config=config,
                 supervisor_model=supervisor_model,
-                api_key=os.getenv("OPENROUTER_API_KEY"),
+                api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
                 codex_binary=codex_binary
             )
         
@@ -67,9 +66,13 @@ class SupervisorOrchestrator:
         
         self.continuation_count = 0
         
+        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+        
         self.client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.getenv("OPENROUTER_API_KEY")
+            base_url=base_url,
+            api_key=api_key
         )
         
         self.conversation_history = []
@@ -213,12 +216,20 @@ class SupervisorOrchestrator:
         summary_prompt = get_summarization_prompt(formatted_content)
 
         try:
-            response = await self.context_manager.client.chat.completions.create(
-                model=self.context_manager.summarization_model,
-                messages=[{"role": "user", "content": summary_prompt}],
-                max_tokens=2000,
-                temperature=0.1
-            )
+            # Use correct parameters based on API provider
+            completion_params = {
+                "model": self.context_manager.summarization_model,
+                "messages": [{"role": "user", "content": summary_prompt}],
+            }
+            
+            # Only set temperature and max_tokens for OpenRouter
+            if os.getenv("OPENROUTER_API_KEY"):
+                completion_params["temperature"] = 0.1
+                completion_params["max_tokens"] = 10000
+            else:
+                completion_params["max_completion_tokens"] = 10000
+                
+            response = await self.context_manager.client.chat.completions.create(**completion_params)
             
             return response.choices[0].message.content or "Summary generation failed"
             
@@ -245,7 +256,11 @@ class SupervisorOrchestrator:
         """Switch to a random different model."""
         import random
         
-        available_models = ["anthropic/claude-sonnet-4", "openai/o3", "anthropic/claude-opus-4", "google/gemini-2.5-pro", "openai/o3-pro"] 
+        # Different model lists based on API provider
+        if os.getenv("OPENROUTER_API_KEY"):
+            available_models = ["anthropic/claude-sonnet-4", "openai/o3", "anthropic/claude-opus-4", "google/gemini-2.5-pro", "openai/o3-pro"]
+        else:
+            available_models = ["o3", "gpt-5"]  # OpenAI direct models 
         if self.supervisor_model in available_models:
             available_models.remove(self.supervisor_model)
         
@@ -283,13 +298,21 @@ class SupervisorOrchestrator:
     async def _get_supervisor_response(self, instance_responses: Dict[str, str] = None) -> Optional[str]:
         """Get a response from the supervisor model."""
         try:
-            response = await self.client.chat.completions.create(
-                model=self.supervisor_model,
-                messages=self.conversation_history,
-                tools=self.tools.get_tool_definitions(),
-                tool_choice="auto",
-                max_tokens=4000,
-            )
+            # Use correct parameters based on API provider
+            completion_params = {
+                "model": self.supervisor_model,
+                "messages": self.conversation_history,
+                "tools": self.tools.get_tool_definitions(),
+                "tool_choice": "auto",
+            }
+            
+            # Only set max_tokens for OpenRouter
+            if os.getenv("OPENROUTER_API_KEY"):
+                completion_params["max_tokens"] = 10000
+            else:
+                completion_params["max_completion_tokens"] = 10000
+                
+            response = await self.client.chat.completions.create(**completion_params)
             
             message = response.choices[0].message
             content = message.content or ""
@@ -551,13 +574,21 @@ class SupervisorOrchestrator:
                     self.conversation_history, preserve_recent=20
                 )
             
-            response = await self.client.chat.completions.create(
-                model=self.supervisor_model,
-                messages=self.conversation_history,
-                tools=self.tools.get_tool_definitions(),
-                tool_choice="auto",
-                max_tokens=4000,
-            )
+            # Use correct parameters based on API provider
+            completion_params = {
+                "model": self.supervisor_model,
+                "messages": self.conversation_history,
+                "tools": self.tools.get_tool_definitions(),
+                "tool_choice": "auto",
+            }
+            
+            # Only set max_tokens for OpenRouter
+            if os.getenv("OPENROUTER_API_KEY"):
+                completion_params["max_tokens"] = 10000
+            else:
+                completion_params["max_completion_tokens"] = 10000
+                
+            response = await self.client.chat.completions.create(**completion_params)
             
             message = response.choices[0].message
             content = message.content or ""
