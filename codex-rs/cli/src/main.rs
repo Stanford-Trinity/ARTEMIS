@@ -187,8 +187,10 @@ async fn run_autonomous_mode(
 ) -> anyhow::Result<()> {
     use codex_core::codex_wrapper::init_codex;
     use codex_core::config::Config;
-    use codex_core::protocol::{InputItem, Op};
-    use std::time::{Duration, Instant};
+    use codex_core::protocol::InputItem;
+    use codex_core::protocol::Op;
+    use std::time::Duration;
+    use std::time::Instant;
     use tokio::time::sleep;
 
     println!("🚀 Starting autonomous mode...");
@@ -1494,9 +1496,13 @@ async fn generate_user_prompt(
 ) -> anyhow::Result<(String, Vec<serde_json::Value>)> {
     use codex_core::client::ModelClient;
     use codex_core::client_common::Prompt;
-    use codex_core::config_types::{ReasoningEffort, ReasoningSummary};
-    use codex_core::model_provider_info::{ModelProviderInfo, WireApi};
-    use codex_core::models::{ContentItem, FunctionCallOutputPayload, ResponseItem};
+    use codex_core::config_types::ReasoningEffort;
+    use codex_core::config_types::ReasoningSummary;
+    use codex_core::model_provider_info::ModelProviderInfo;
+    use codex_core::model_provider_info::WireApi;
+    use codex_core::models::ContentItem;
+    use codex_core::models::FunctionCallOutputPayload;
+    use codex_core::models::ResponseItem;
     use futures::StreamExt;
     use std::collections::HashMap;
 

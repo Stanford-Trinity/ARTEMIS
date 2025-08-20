@@ -358,7 +358,8 @@ async fn wait_for_supervisor_followup(
 ) -> anyhow::Result<Option<String>> {
     use chrono::Utc;
     use std::fs;
-    use tokio::time::{Duration, sleep};
+    use tokio::time::Duration;
+    use tokio::time::sleep;
 
     let status_file = log_dir.join("status.json");
     let followup_file = log_dir.join("followup_input.json");
