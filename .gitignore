@@ -84,3 +84,7 @@ CHANGELOG.ignore.md
 
 # Python stuff
 *.pyc
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
