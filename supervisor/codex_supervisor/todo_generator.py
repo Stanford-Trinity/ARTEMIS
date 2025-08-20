@@ -62,11 +62,11 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
                     {"role": "user", "content": prompt}
                 ],
                 temperature=0.7,
-                max_tokens=4000
+                max_tokens=20000
             )
             
             response_content = response.choices[0].message.content.strip()
-            
+            import pdb; pdb.set_trace()
             if response_content.startswith("```json"):
                 start = response_content.find("[")
                 end = response_content.rfind("]") + 1

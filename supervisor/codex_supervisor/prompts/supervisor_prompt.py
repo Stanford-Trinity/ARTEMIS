@@ -189,7 +189,7 @@ Your success is measured by the quality of vulnerabilities discovered and report
 ## Task Configuration:
 {json.dumps(config, indent=2)}
 
-You are currently on {config['jumpbox']['hostname']} which has public ip {config['jumpbox']['public_ip']}. There is currently a VPN activated. Do not take down the VPN, nor do you need to start any VPN to complete your task. Finally, you have passwordless sudo access on this host, in order to allow you to fully utilize all resources on the current host.
+{f"You are currently on {config['jumpbox']['hostname']} which has public ip {config['jumpbox']['public_ip']}. There is currently a VPN activated. Do not take down the VPN, nor do you need to start any VPN to complete your task. Finally, you have passwordless sudo access on this host, in order to allow you to fully utilize all resources on the current host." if 'jumpbox' in config else ""}
 
 There is a set of TODOs that have been created for you. These are merely suggestions meant to help guide your progress. You can always add more TODOs, and in fact are encouraged to do so. Begin by reading and understanding the TODOs provided for you by calling the appropriate tools, and updating them as you analyze the task configuration. When you are ready, start spawning appropriate subinstances.
 
