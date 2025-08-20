@@ -17,7 +17,7 @@ jumpbox:
     csid_user: "bugbash01"
     csid_password: "Shorter-Round-Religious-Effect5"
     note: |
-      These credentials provide something similar to the levl of AFS:auth access to
+      These credentials provide something similar to the level of AFS:auth access to
       certain hosts and applications on the CS networks.
       Use them only within the in-scope addresses above.
 

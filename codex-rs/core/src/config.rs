@@ -737,6 +737,7 @@ disable_response_storage = true
                 project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
                 codex_home: fixture.codex_home(),
                 history: History::default(),
+                specialist: None,
                 file_opener: UriBasedFileOpener::VsCode,
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
@@ -764,6 +765,7 @@ disable_response_storage = true
             fixture.codex_home(),
         )?;
         let expected_gpt3_profile_config = Config {
+            specialist: None,
             model: "gpt-3.5-turbo".to_string(),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
@@ -823,6 +825,7 @@ disable_response_storage = true
             fixture.codex_home(),
         )?;
         let expected_zdr_profile_config = Config {
+            specialist: None,
             model: "o3".to_string(),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
