@@ -10,10 +10,19 @@ class TaskRouter:
     """Routes tasks to appropriate specialist codex instances using an LLM."""
     
     def __init__(self, router_model: str = "openai/o4-mini"):
-        self.router_model = router_model
+        # Adjust model name if using OpenAI directly
+        if not os.getenv("OPENROUTER_API_KEY") and router_model == "openai/o4-mini":
+            self.router_model = "o4-mini"  # Remove openai/ prefix for direct OpenAI API
+        else:
+            self.router_model = router_model
+        
+        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+        
         self.client = AsyncOpenAI(
-            api_key=os.getenv("OPENROUTER_API_KEY"),
-            base_url="https://openrouter.ai/api/v1"
+            api_key=api_key,
+            base_url=base_url
         )
         
         # Custom specialist agents
@@ -36,15 +45,23 @@ class TaskRouter:
             prompt = get_router_prompt(task_description, self.specialists)
             
             try:
-                response = await self.client.chat.completions.create(
-                    model=self.router_model,
-                    messages=[
+                # Use correct parameters based on API provider
+                completion_params = {
+                    "model": self.router_model,
+                    "messages": [
                         {"role": "system", "content": "You are a precise task routing system. Always respond with valid JSON."},
                         {"role": "user", "content": prompt}
                     ],
-                    temperature=0.1,
-                    max_tokens=2000
-                )
+                }
+                
+                # Only set temperature and max_tokens for OpenRouter
+                if os.getenv("OPENROUTER_API_KEY"):
+                    completion_params["temperature"] = 0.1
+                    completion_params["max_tokens"] = 10000
+                else:
+                    completion_params["max_completion_tokens"] = 10000
+                    
+                response = await self.client.chat.completions.create(**completion_params)
             except Exception as api_error:
                 logging.error(f"❌ TaskRouter: API call failed: {type(api_error).__name__}: {api_error}")
                 return {"specialist": "generalist"}

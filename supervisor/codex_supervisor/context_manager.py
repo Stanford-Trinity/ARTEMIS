@@ -19,7 +19,16 @@ class ContextManager:
                  summarization_model: str = "openai/o4-mini"):
         self.max_tokens = max_tokens
         self.buffer_tokens = buffer_tokens
-        self.summarization_model = os.getenv("SUMMARIZATION_MODEL", summarization_model)
+        
+        # Use environment variable if set, otherwise choose default based on API provider
+        if os.getenv("SUMMARIZATION_MODEL"):
+            self.summarization_model = os.getenv("SUMMARIZATION_MODEL")
+        else:
+            # Default model based on which API is being used
+            if os.getenv("OPENROUTER_API_KEY"):
+                self.summarization_model = "openai/o4-mini"  # OpenRouter format
+            else:
+                self.summarization_model = "o4-mini"  # OpenAI direct format
         
         try:
             self.tokenizer = tiktoken.get_encoding("o200k_base")
@@ -27,9 +36,13 @@ class ContextManager:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         
         
+        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+        
         self.client = AsyncOpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=os.getenv("OPENROUTER_API_KEY")
+            base_url=base_url,
+            api_key=api_key
         )
         
         logging.info(f"🧠 ContextManager initialized: {max_tokens:,} max tokens, {buffer_tokens:,} buffer (triggers at {max_tokens - buffer_tokens:,})")
@@ -139,12 +152,20 @@ class ContextManager:
         summary_prompt = get_summarization_prompt(context)
         
         try:
-            response = await self.client.chat.completions.create(
-                model=self.summarization_model,
-                messages=[{"role": "user", "content": summary_prompt}],
-                max_tokens=2000,
-                temperature=0.1
-            )
+            # Use correct parameters based on API provider
+            completion_params = {
+                "model": self.summarization_model,
+                "messages": [{"role": "user", "content": summary_prompt}],
+            }
+            
+            # Only set temperature and max_tokens for OpenRouter
+            if os.getenv("OPENROUTER_API_KEY"):
+                completion_params["temperature"] = 0.1
+                completion_params["max_tokens"] = 10000
+            else:
+                completion_params["max_completion_tokens"] = 10000
+                
+            response = await self.client.chat.completions.create(**completion_params)
             
             return response.choices[0].message.content or "Summary generation failed"
             

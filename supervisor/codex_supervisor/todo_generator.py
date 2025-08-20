@@ -13,13 +13,27 @@ from openai import AsyncOpenAI
 
 
 class TodoGenerator:
-    def __init__(self, api_key: str):
-        """Initialize TODO generator with OpenRouter API key."""
+    def __init__(self, api_key: str, use_openrouter: bool = None):
+        """Initialize TODO generator with API key."""
+        # Auto-detect provider if not specified
+        if use_openrouter is None:
+            use_openrouter = api_key.startswith('sk-or-') or 'openrouter' in api_key.lower()
+        
+        base_url = "https://openrouter.ai/api/v1" if use_openrouter else "https://api.openai.com/v1"
+        
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url="https://openrouter.ai/api/v1"
+            base_url=base_url
         )
-        self.model = "anthropic/claude-opus-4.1"
+        
+        # Store provider type for later use
+        self.use_openrouter = use_openrouter
+        
+        # Set model based on provider
+        if use_openrouter:
+            self.model = "anthropic/claude-opus-4.1"
+        else:
+            self.model = "gpt-5"  # Use OpenAI's gpt-5
         
     async def generate_todos_from_config(self, config_content: str) -> List[Dict[str, Any]]:
         """Generate hierarchical TODOs from penetration testing configuration."""
@@ -56,17 +70,25 @@ Where you can recursively create these objects inside each "subtasks" list. Your
 IMPORTANT: Only respond with the JSON array. Do not include any other text or explanation."""
 
         try:
-            response = await self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7,
-                max_tokens=20000
-            )
+            # Use correct parameter name based on provider
+            completion_params = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+            }
+            
+            # Only set temperature for OpenRouter, OpenAI's newer models don't support custom temperature
+            if self.use_openrouter:
+                completion_params["temperature"] = 0.7
+            
+            # OpenRouter uses max_tokens, OpenAI direct uses max_completion_tokens for newer models
+            if self.use_openrouter:
+                completion_params["max_tokens"] = 20000
+            else:
+                completion_params["max_completion_tokens"] = 20000
+                
+            response = await self.client.chat.completions.create(**completion_params)
             
             response_content = response.choices[0].message.content.strip()
-            import pdb; pdb.set_trace()
             if response_content.startswith("```json"):
                 start = response_content.find("[")
                 end = response_content.rfind("]") + 1
@@ -157,9 +179,9 @@ if __name__ == "__main__":
     config_file = Path(sys.argv[1])
     output_file = Path(sys.argv[2])
     
-    api_key = os.getenv("OPENROUTER_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
     if not api_key:
-        print("Error: OPENROUTER_API_KEY environment variable not set")
+        print("Error: Either OPENROUTER_API_KEY or OPENAI_API_KEY environment variable must be set")
         sys.exit(1)
     
     asyncio.run(generate_pentest_todos(config_file, output_file, api_key))
