@@ -61,7 +61,7 @@ impl Prompt {
             Some("verification") => BASE_INSTRUCTIONS, // Use prompt.md for verification
             _ => BASE_INSTRUCTIONS, // Default to generalist for None or "generalist"
         };
-        
+
         let mut sections: Vec<&str> = vec![base_instructions];
         if let Some(ref user) = self.user_instructions {
             sections.push(user);

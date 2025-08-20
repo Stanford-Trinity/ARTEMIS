@@ -1,9 +1,9 @@
 use anyhow::Context;
 use clap::Parser;
-use codex_cli::login::run_login_with_chatgpt;
-use codex_cli::proto;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::run_login_with_chatgpt;
+use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
@@ -191,7 +191,6 @@ async fn run_autonomous_mode(
     use std::time::{Duration, Instant};
     use tokio::time::sleep;
 
-
     println!("🚀 Starting autonomous mode...");
     println!("📁 Config file: {:?}", autonomous_cli.config_file);
     if let Some(ref resume_dir) = autonomous_cli.resume_dir {
@@ -274,7 +273,7 @@ async fn run_autonomous_mode(
                 network_access: true,
             });
     }
-    
+
     // Set specialist mode if provided
     if let Some(mode) = autonomous_cli.mode {
         config_overrides.specialist = Some(mode);
@@ -288,16 +287,29 @@ async fn run_autonomous_mode(
         config_overrides,
     )
     .with_context(|| "Failed to load codex config")?;
-    
+
     // Debug: Log the actual config being used
-    println!("🔧 DEBUG: Loaded config - model: {}, provider: {}", 
-             config.model, 
-             config.model_provider.name);
+    println!(
+        "🔧 DEBUG: Loaded config - model: {}, provider: {}",
+        config.model, config.model_provider.name
+    );
     println!("🔧 DEBUG: Driver model: {}", autonomous_cli.driver_model);
-    println!("🔧 DEBUG: OPENROUTER_API_KEY: {}", 
-             if std::env::var("OPENROUTER_API_KEY").is_ok() { "SET" } else { "NOT SET" });
-    println!("🔧 DEBUG: OPENAI_API_KEY: {}", 
-             if std::env::var("OPENAI_API_KEY").is_ok() { "SET" } else { "NOT SET" });
+    println!(
+        "🔧 DEBUG: OPENROUTER_API_KEY: {}",
+        if std::env::var("OPENROUTER_API_KEY").is_ok() {
+            "SET"
+        } else {
+            "NOT SET"
+        }
+    );
+    println!(
+        "🔧 DEBUG: OPENAI_API_KEY: {}",
+        if std::env::var("OPENAI_API_KEY").is_ok() {
+            "SET"
+        } else {
+            "NOT SET"
+        }
+    );
 
     // Initialize codex session
     let (codex, _init_event, _ctrl_c) = init_codex(config.clone()).await?;
@@ -610,7 +622,7 @@ async fn run_autonomous_mode(
             // Handle supervisor LLM tool calls and generate final user prompt
             let final_user_prompt = if !tool_results.is_empty() {
                 // Case 2: Supervisor made tool calls - need to get follow-up response
-                
+
                 // Add user message with tool calls to conversation log
                 conversation_log.push(serde_json::json!({
                     "role": "user",
@@ -640,11 +652,11 @@ async fn run_autonomous_mode(
                 }
 
                 // Generate follow-up prompt from supervisor with tool results
-                let follow_up_context = format!("{}\n\nTool Results:\n{}", 
-                    final_context, 
+                let follow_up_context = format!("{}\n\nTool Results:\n{}",
+                    final_context,
                     serde_json::to_string_pretty(&tool_results).unwrap_or_default()
                 );
-                
+
                 let follow_up_driver_prompt = inject_template_variables(
                     &continuation_prompt_template,
                     &config_content,
@@ -666,13 +678,13 @@ async fn run_autonomous_mode(
                 }));
 
                 // Update context with follow-up conversation
-                final_context = format!("{}\n\nUSER: {}\n\nASSISTANT: {}", 
+                final_context = format!("{}\n\nUSER: {}\n\nASSISTANT: {}",
                     final_context, follow_up_prompt, follow_up_prompt);
 
                 follow_up_prompt
             } else {
                 // Case 1: No tool calls - use original supervisor message directly
-                
+
                 // Add regular user message to conversation log
                 conversation_log.push(serde_json::json!({
                     "role": "user",
@@ -767,7 +779,7 @@ async fn run_autonomous_mode(
                                     tool_call.get("type").and_then(|t| t.as_str()) != Some("system")
                                 })
                                 .collect();
-                            
+
                             if !filtered_tool_calls.is_empty() {
                                 readable_context.push_str(&format!(
                                     "ASSISTANT_TOOL_CALLS: {}\n\n",
@@ -1592,21 +1604,26 @@ async fn generate_user_prompt(
     );
 
     // Tool to finish the autonomous session
-    extra_tools.insert("finished".to_string(), mcp_types::Tool {
-        name: "finished".to_string(),
-        description: Some("Mark the autonomous session as finished and exit the loop".to_string()),
-        annotations: None,
-        input_schema: mcp_types::ToolInputSchema {
-            r#type: "object".to_string(),
-            properties: Some(serde_json::json!({
-                "reason": {
-                    "type": "string",
-                    "description": "Reason for finishing the session"
-                }
-            })),
-            required: Some(vec!["reason".to_string()]),
+    extra_tools.insert(
+        "finished".to_string(),
+        mcp_types::Tool {
+            name: "finished".to_string(),
+            description: Some(
+                "Mark the autonomous session as finished and exit the loop".to_string(),
+            ),
+            annotations: None,
+            input_schema: mcp_types::ToolInputSchema {
+                r#type: "object".to_string(),
+                properties: Some(serde_json::json!({
+                    "reason": {
+                        "type": "string",
+                        "description": "Reason for finishing the session"
+                    }
+                })),
+                required: Some(vec!["reason".to_string()]),
+            },
         },
-    });
+    );
 
     let prompt = Prompt {
         input: vec![user_message.clone()],
@@ -1673,7 +1690,8 @@ async fn generate_user_prompt(
 
     // Handle tool calls
     if !tool_calls.is_empty() {
-        let (tool_results, _finished) = handle_supervisor_tool_calls(&tool_calls, session_logs_dir).await?;
+        let (tool_results, _finished) =
+            handle_supervisor_tool_calls(&tool_calls, session_logs_dir).await?;
 
         // Add tool calls and results to conversation and get new instruction
         let mut conversation = vec![user_message];
@@ -1938,13 +1956,13 @@ async fn handle_supervisor_tool_calls(
             "finished" => {
                 let reason = arguments["reason"].as_str().unwrap_or("No reason provided");
                 println!("🏁 Session finished by driver model: {}", reason);
-                
+
                 tool_results.push(serde_json::json!({
                     "tool_call_id": tool_id,
                     "tool_name": tool_name,
                     "content": format!("✅ Autonomous session finished: {}", reason)
                 }));
-                
+
                 session_finished = true;
             }
             _ => {

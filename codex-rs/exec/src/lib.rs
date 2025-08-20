@@ -152,10 +152,16 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Initialize real-time logger if requested
     let realtime_logger = if let Some(ref log_dir) = log_session_dir {
-        let instance_id_str = instance_id.clone().unwrap_or_else(|| {
-            format!("codex_{}", std::process::id())
-        });
-        Some(Arc::new(RealtimeLogger::new(log_dir.clone(), instance_id_str, &prompt, model.clone(), config.specialist.clone())?))
+        let instance_id_str = instance_id
+            .clone()
+            .unwrap_or_else(|| format!("codex_{}", std::process::id()));
+        Some(Arc::new(RealtimeLogger::new(
+            log_dir.clone(),
+            instance_id_str,
+            &prompt,
+            model.clone(),
+            config.specialist.clone(),
+        )?))
     } else {
         None
     };
@@ -222,9 +228,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Send the prompt.
     let mut current_prompt = prompt;
     let mut message_index = 0;
-    
+
     loop {
-        let items: Vec<InputItem> = vec![InputItem::Text { text: current_prompt.clone() }];
+        let items: Vec<InputItem> = vec![InputItem::Text {
+            text: current_prompt.clone(),
+        }];
         let task_id = codex.submit(Op::UserInput { items }).await?;
         info!("Sent prompt with event ID: {task_id}");
 
@@ -237,20 +245,20 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 }
                 _ => (false, None),
             };
-            
+
             // Check if this is an assistant message
             if matches!(event.msg, EventMsg::AgentMessage(_)) {
                 assistant_responded = true;
                 message_index += 1;
             }
-            
+
             // Log event to real-time logger if enabled
             if let Some(ref logger) = realtime_logger {
                 if let Err(e) = logger.log_event(&event).await {
                     error!("Failed to log event to realtime logger: {e:?}");
                 }
             }
-            
+
             event_processor.process_event(event);
             if is_last_event {
                 if !wait_for_followup {
@@ -260,15 +268,25 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 break;
             }
         }
-        
+
         // If we're in followup mode and assistant responded, wait for supervisor
         if wait_for_followup && assistant_responded {
             if let Some(ref log_dir) = log_session_dir {
-                let instance_id_str = instance_id.as_ref().map(|s| s.as_str()).unwrap_or("unknown");
-                match wait_for_supervisor_followup(log_dir, instance_id_str, message_index, model.as_deref()).await {
+                let instance_id_str = instance_id
+                    .as_ref()
+                    .map(|s| s.as_str())
+                    .unwrap_or("unknown");
+                match wait_for_supervisor_followup(
+                    log_dir,
+                    instance_id_str,
+                    message_index,
+                    model.as_deref(),
+                )
+                .await
+                {
                     Ok(Some(followup)) => {
                         current_prompt = followup;
-                        
+
                         // Update status to indicate we're processing the followup
                         let status_file = log_dir.join("status.json");
                         let mut status_obj = serde_json::json!({
@@ -277,16 +295,19 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                             "last_message_index": message_index,
                             "timestamp": chrono::Utc::now().to_rfc3339()
                         });
-                        
+
                         // Add model information if available
                         if let Some(ref model_name) = model {
                             status_obj["model"] = serde_json::Value::String(model_name.to_string());
                         }
-                        
+
                         let status = status_obj;
-                        let _ = std::fs::write(&status_file, serde_json::to_string_pretty(&status).unwrap_or_default());
+                        let _ = std::fs::write(
+                            &status_file,
+                            serde_json::to_string_pretty(&status).unwrap_or_default(),
+                        );
                         info!("Updated status to 'processing' after receiving followup");
-                        
+
                         continue; // Continue the loop with new prompt
                     }
                     Ok(None) => {
@@ -331,17 +352,17 @@ fn handle_last_message(
 
 async fn wait_for_supervisor_followup(
     log_dir: &std::path::Path,
-    instance_id: &str, 
+    instance_id: &str,
     message_index: usize,
-    model: Option<&str>
+    model: Option<&str>,
 ) -> anyhow::Result<Option<String>> {
-    use tokio::time::{sleep, Duration};
-    use std::fs;
     use chrono::Utc;
-    
+    use std::fs;
+    use tokio::time::{Duration, sleep};
+
     let status_file = log_dir.join("status.json");
     let followup_file = log_dir.join("followup_input.json");
-    
+
     // Write status to indicate we're waiting for followup
     let mut status_obj = serde_json::json!({
         "status": "waiting_for_followup",
@@ -349,21 +370,21 @@ async fn wait_for_supervisor_followup(
         "last_message_index": message_index,
         "timestamp": Utc::now().to_rfc3339()
     });
-    
+
     // Add model information if available
     if let Some(model_name) = model {
         status_obj["model"] = serde_json::Value::String(model_name.to_string());
     }
-    
+
     let status = status_obj;
-    
+
     fs::write(&status_file, serde_json::to_string_pretty(&status)?)?;
     info!("Waiting for supervisor followup...");
-    
+
     // Poll for followup file with timeout
     let timeout_duration = Duration::from_secs(300); // 5 minute timeout
     let start_time = tokio::time::Instant::now();
-    
+
     loop {
         // Check if followup file exists
         if followup_file.exists() {
@@ -374,8 +395,10 @@ async fn wait_for_supervisor_followup(
                         Ok(followup_json) => {
                             // Remove the followup file to prepare for next iteration
                             let _ = fs::remove_file(&followup_file);
-                            
-                            if let Some(message) = followup_json.get("message").and_then(|m| m.as_str()) {
+
+                            if let Some(message) =
+                                followup_json.get("message").and_then(|m| m.as_str())
+                            {
                                 if message.trim().is_empty() {
                                     // Empty message means terminate
                                     return Ok(None);
@@ -383,7 +406,11 @@ async fn wait_for_supervisor_followup(
                                     // Return the followup message
                                     return Ok(Some(message.to_string()));
                                 }
-                            } else if followup_json.get("terminate").and_then(|t| t.as_bool()).unwrap_or(false) {
+                            } else if followup_json
+                                .get("terminate")
+                                .and_then(|t| t.as_bool())
+                                .unwrap_or(false)
+                            {
                                 // Explicit termination
                                 return Ok(None);
                             }
@@ -398,13 +425,13 @@ async fn wait_for_supervisor_followup(
                 }
             }
         }
-        
+
         // Check timeout
         if start_time.elapsed() > timeout_duration {
             info!("Timeout waiting for supervisor followup, terminating");
             return Ok(None);
         }
-        
+
         // Sleep before next check
         sleep(Duration::from_millis(500)).await;
     }
