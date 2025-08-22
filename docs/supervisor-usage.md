@@ -1,4 +1,4 @@
-docs/supervisor-usage.md # Supervisor Usage Guide
+# Supervisor Usage Guide
 
 The Supervisor orchestrates multiple Codex instances for comprehensive security testing.
 
