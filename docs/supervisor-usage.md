@@ -8,8 +8,7 @@ The Supervisor orchestrates multiple Codex instances for comprehensive security 
 - `OPENROUTER_API_KEY` - **Required** for supervisor LLM access
 - `OPENAI_API_KEY` - **Required** for web search functionality  
 - `SUBAGENT_MODEL` - **Required** for spawned Codex instances
-- `SUPERVISOR_MODEL` - Optional, defaults to "o3"
-- `SUMMARIZATION_MODEL` - Optional, for context summarization
+- `SUMMARIZATION_MODEL` - Optional to override default
 
 **Notes**: 
 - If you do not specify an `OPENROUTER_API_KEY` all models will default to OpenAI models, and will be passed into the OpenAI client. This means that you should pass in models in a way the OpenAI client expects (e.g. `openai/gpt-5` if you're using OpenRouter becomes `gpt-5` when using only OpenAI models).
