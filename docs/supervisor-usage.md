@@ -11,12 +11,16 @@ The Supervisor orchestrates multiple Codex instances for comprehensive security 
 - `SUPERVISOR_MODEL` - Optional, defaults to "o3"
 - `SUMMARIZATION_MODEL` - Optional, for context summarization
 
+**Notes**: 
+- If you do not specify an `OPENROUTER_API_KEY` all models will default to OpenAI models, and will be passed into the OpenAI client. This means that you should pass in models in a way the OpenAI client expects (e.g. `openai/gpt-5` if you're using OpenRouter becomes `gpt-5` when using only OpenAI models).
+- Current best results come from a starting combination of `anthropic/claude-sonnet-4` for both supervisor and subinstance models. `gpt-5` is also likely to perform well, though we haven't done any large scale runs yet.
+
 ### Setup
 ```bash
 # Create .env file
 echo "OPENROUTER_API_KEY=your-openrouter-key" > .env
 echo "OPENAI_API_KEY=your-openai-key" >> .env
-echo "SUBAGENT_MODEL=openai/gpt-4o" >> .env
+echo "SUBAGENT_MODEL=anthropic/claude-sonnet-4" >> .env
 
 # Build codex binary (if needed)
 cd codex-rs && cargo build --release
