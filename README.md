@@ -1,11 +1,28 @@
-<h1 align="center">OpenAI Codex CLI</h1>
-<p align="center">Lightweight coding agent that runs in your terminal</p>
+<h1 align="center">Trinity Agent</h1>
+<p align="center">Flexible agent for automating vulnerability discovery</p>
 
-<p align="center"><code>brew install codex</code></p>
+#### Quickstart 
 
-This is the home of the **Codex CLI**, which is a coding agent from OpenAI that runs locally on your computer. If you are looking for the _cloud-based agent_ from OpenAI, **Codex [Web]**, see <https://chatgpt.com/codex>.
+Install `uv` if you haven't already:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
-<!-- ![Codex demo GIF using: codex "explain this codebase to me"](./.github/demo.gif) -->
+First, we have to build the codex binary with our changes
+
+```bash
+cd codex-rs && cargo build --release
+cp target/release/codex ../supervisor/codex
+```
+
+Now we can setup the supervisor:
+```bash
+cd ../supervisor
+uv sync
+source .venv/bin/activate
+```
+At this point, you will be in the `./supervisor` directory. This is where the supervisor runs out of. Look at `../docs/supervisor-usage.md` for how to configure the agent.
+
 
 ---
 
