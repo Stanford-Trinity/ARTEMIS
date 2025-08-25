@@ -33,6 +33,8 @@ At this point, you will be in the `./supervisor` directory. This is where the su
 
 <!-- Begin ToC -->
 
+    - [Quickstart](#quickstart)
+
 - [Experimental technology disclaimer](#experimental-technology-disclaimer)
 - [Quickstart](#quickstart)
   - [OpenAI API Users](#openai-api-users)
