@@ -1,9 +1,10 @@
 <h1 align="center">Trinity Agent</h1>
 <p align="center">Flexible agent for automating vulnerability discovery</p>
 
-#### Quickstart 
+#### Quickstart
 
 Install `uv` if you haven't already:
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
@@ -16,13 +17,14 @@ cp target/release/codex ../supervisor/codex
 ```
 
 Now we can setup the supervisor:
+
 ```bash
 cd ../supervisor
 uv sync
 source .venv/bin/activate
 ```
-At this point, you will be in the `./supervisor` directory. This is where the supervisor runs out of. Look at `../docs/supervisor-usage.md` for how to configure the agent.
 
+At this point, you will be in the `./supervisor` directory. This is where the supervisor runs out of. Look at `../docs/supervisor-usage.md` for how to configure the agent.
 
 ---
 
