@@ -35,6 +35,26 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+/// Get the system prompt for a specific specialist
+fn get_specialist_system_prompt(specialist: &str) -> String {
+    match specialist {
+        "active_directory" => include_str!("../../core/active_directory.md").to_string(),
+        "client_side_web" => include_str!("../../core/client_side_web.md").to_string(),
+        "enumeration" => include_str!("../../core/enumeration.md").to_string(),
+        "linux_privesc" => include_str!("../../core/linux_privesc.md").to_string(),
+        "shelling" => include_str!("../../core/shelling.md").to_string(),
+        "web_enumeration" => include_str!("../../core/web_enumeration.md").to_string(),
+        "web" => include_str!("../../core/web.md").to_string(),
+        "windows_privesc" => include_str!("../../core/windows_privesc.md").to_string(),
+        "verification" => include_str!("../../core/prompt.md").to_string(),
+        _ => get_default_system_prompt(),
+    }
+}
+
+/// Get the default system prompt (generalist)
+fn get_default_system_prompt() -> String {
+    include_str!("../../core/prompt.md").to_string()
+}
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -211,12 +231,50 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         let instance_id_str = instance_id
             .clone()
             .unwrap_or_else(|| format!("codex_{}", std::process::id()));
+
+        // Get system prompt based on specialist
+        let system_prompt = if let Some(ref specialist) = config.specialist {
+            Some(get_specialist_system_prompt(specialist))
+        } else {
+            Some(get_default_system_prompt())
+        };
+
+        // Get tools configuration - create ToolsConfig with same parameters as used in Codex
+        let tools = {
+            use codex_core::openai_tools::{ToolsConfig, ToolsConfigParams, get_openai_tools, create_tools_json_for_responses_api};
+            
+            let approval_policy = config.approval_policy;
+            let sandbox_policy = config.sandbox_policy;
+            
+            let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                model_family: &config.model_family,
+                approval_policy,
+                sandbox_policy: sandbox_policy.clone(),
+                include_plan_tool: config.include_plan_tool,
+                include_apply_patch_tool: config.include_apply_patch_tool,
+                include_web_search_request: config.tools_web_search_request,
+                use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            });
+            
+            let openai_tools = get_openai_tools(&tools_config, None); // No MCP tools for now
+            if !openai_tools.is_empty() {
+                match create_tools_json_for_responses_api(&openai_tools) {
+                    Ok(tools_json) => Some(serde_json::Value::Array(tools_json)),
+                    Err(_) => None,
+                }
+            } else {
+                None
+            }
+        };
+
         Some(Arc::new(RealtimeLogger::new(
             log_dir.clone(),
             instance_id_str,
             &prompt,
             model.clone(),
             config.specialist.clone(),
+            system_prompt,
+            tools,
         )?))
     } else {
         None

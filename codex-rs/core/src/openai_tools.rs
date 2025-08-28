@@ -62,21 +62,21 @@ pub enum ConfigShellToolType {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ToolsConfig {
+pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub plan_tool: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
 }
 
-pub(crate) struct ToolsConfigParams<'a> {
-    pub(crate) model_family: &'a ModelFamily,
-    pub(crate) approval_policy: AskForApproval,
-    pub(crate) sandbox_policy: SandboxPolicy,
-    pub(crate) include_plan_tool: bool,
-    pub(crate) include_apply_patch_tool: bool,
-    pub(crate) include_web_search_request: bool,
-    pub(crate) use_streamable_shell_tool: bool,
+pub struct ToolsConfigParams<'a> {
+    pub model_family: &'a ModelFamily,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub include_plan_tool: bool,
+    pub include_apply_patch_tool: bool,
+    pub include_web_search_request: bool,
+    pub use_streamable_shell_tool: bool,
 }
 
 impl ToolsConfig {
@@ -496,7 +496,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 /// Returns a list of OpenAiTools based on the provided config and MCP tools.
 /// Note that the keys of mcp_tools should be fully qualified names. See
 /// [`McpConnectionManager`] for more details.
-pub(crate) fn get_openai_tools(
+pub fn get_openai_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
 ) -> Vec<OpenAiTool> {

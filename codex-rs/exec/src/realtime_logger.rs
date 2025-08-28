@@ -16,6 +16,8 @@ pub struct RealtimeLogger {
     instance_id: String,
     model: Option<String>,
     specialist: Option<String>,
+    system_prompt: Option<String>,
+    tools: Option<serde_json::Value>,
     conversation_log: Arc<Mutex<Vec<serde_json::Value>>>,
     context_file: Arc<Mutex<std::fs::File>>,
     start_time: DateTime<Utc>,
@@ -28,6 +30,8 @@ impl RealtimeLogger {
         initial_prompt: &str,
         model: Option<String>,
         specialist: Option<String>,
+        system_prompt: Option<String>,
+        tools: Option<serde_json::Value>,
     ) -> anyhow::Result<Self> {
         // Create log directory if it doesn't exist
         std::fs::create_dir_all(&log_dir)?;
@@ -73,6 +77,8 @@ impl RealtimeLogger {
             instance_id: instance_id.clone(),
             model,
             specialist,
+            system_prompt,
+            tools,
             conversation_log: conversation_log.clone(),
             context_file,
             start_time,
@@ -445,6 +451,16 @@ impl RealtimeLogger {
         // Add specialist information if available
         if let Some(ref specialist_name) = self.specialist {
             final_result["specialist"] = serde_json::Value::String(specialist_name.clone());
+        }
+
+        // Add system prompt if available
+        if let Some(ref system_prompt) = self.system_prompt {
+            final_result["system_prompt"] = serde_json::Value::String(system_prompt.clone());
+        }
+
+        // Add tools if available
+        if let Some(ref tools) = self.tools {
+            final_result["tools"] = tools.clone();
         }
 
         let result_path = self.log_dir.join("final_result.json");
