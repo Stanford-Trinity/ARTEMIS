@@ -1,6 +1,8 @@
 mod cli;
 mod event_processor;
 mod realtime_logger;
+mod event_processor_with_human_output;
+mod event_processor_with_json_output;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -9,7 +11,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use cli::Cli;
-use codex_core::codex_wrapper;
+use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
+use codex_core::ConversationManager;
+use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::protocol::AskForApproval;
@@ -17,20 +21,26 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use event_processor::EventProcessor;
 use realtime_logger::RealtimeLogger;
+use codex_login::AuthManager;
+use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_protocol::config_types::SandboxMode;
+use event_processor_with_human_output::EventProcessorWithHumanOutput;
+use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
         images,
-        model,
+        model: model_cli_arg,
+        oss,
         config_profile,
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
@@ -42,6 +52,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         instance_id,
         wait_for_followup,
         mode,
+        json: json_mode,
+        sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         config_overrides,
     } = cli;
@@ -90,12 +102,29 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         ),
     };
 
-    let sandbox_policy = if full_auto {
-        Some(SandboxPolicy::new_workspace_write_policy())
+    let sandbox_mode = if full_auto {
+        Some(SandboxMode::WorkspaceWrite)
     } else if dangerously_bypass_approvals_and_sandbox {
-        Some(SandboxPolicy::DangerFullAccess)
+        Some(SandboxMode::DangerFullAccess)
     } else {
-        None
+        sandbox_mode_cli_arg.map(Into::<SandboxMode>::into)
+    };
+
+    // When using `--oss`, let the bootstrapper pick the model (defaulting to
+    // gpt-oss:20b) and ensure it is present locally. Also, force the built‑in
+    // `oss` model provider.
+    let model = if let Some(model) = model_cli_arg {
+        Some(model)
+    } else if oss {
+        Some(DEFAULT_OSS_MODEL.to_owned())
+    } else {
+        None // No model specified, will use the default.
+    };
+
+    let model_provider = if oss {
+        Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_string())
+    } else {
+        None // No specific model provider override.
     };
 
     // Load configuration and determine approval policy
@@ -105,11 +134,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
         approval_policy: Some(AskForApproval::Never),
-        sandbox_policy,
+        sandbox_mode,
         cwd: cwd.map(|p| p.canonicalize().unwrap_or(p)),
-        model_provider: None,
+        model_provider,
         codex_linux_sandbox_exe,
         specialist: Some(mode.to_string()),
+        base_instructions: None,
+        include_plan_tool: None,
+        include_apply_patch_tool: None,
+        disable_response_storage: oss.then_some(true),
+        show_raw_agent_reasoning: oss.then_some(true),
+        tools_web_search_request: None,
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -121,17 +156,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
-    let mut event_processor =
-        EventProcessor::create_with_ansi(stdout_with_ansi, !config.hide_agent_reasoning);
-    // Print the effective configuration and prompt so users can see what Codex
-    // is using.
-    event_processor.print_config_summary(&config, &prompt);
-
-    if !skip_git_repo_check && !is_inside_git_repo(&config) {
-        eprintln!("Not inside a Git repo and --skip-git-repo-check was not specified.");
-        std::process::exit(1);
-    }
-
     // TODO(mbolin): Take a more thoughtful approach to logging.
     let default_level = "error";
     let _ = tracing_subscriber::fmt()
@@ -146,9 +170,41 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         .with_writer(std::io::stderr)
         .try_init();
 
-    let (codex_wrapper, event, ctrl_c) = codex_wrapper::init_codex(config.clone()).await?;
-    let codex = Arc::new(codex_wrapper);
-    info!("Codex initialized with event: {event:?}");
+    let mut event_processor: Box<dyn EventProcessor> = if json_mode {
+        Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
+    } else {
+        Box::new(EventProcessorWithHumanOutput::create_with_ansi(
+            stdout_with_ansi,
+            &config,
+            last_message_file.clone(),
+        ))
+    };
+
+    if oss {
+        codex_ollama::ensure_oss_ready(&config)
+            .await
+            .map_err(|e| anyhow::anyhow!("OSS setup failed: {e}"))?;
+    }
+
+    // Print the effective configuration and prompt so users can see what Codex
+    // is using.
+    event_processor.print_config_summary(&config, &prompt);
+
+    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
+        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
+        std::process::exit(1);
+    }
+
+    let conversation_manager = ConversationManager::new(AuthManager::shared(
+        config.codex_home.clone(),
+        config.preferred_auth_method,
+    ));
+    let NewConversation {
+        conversation_id: _,
+        conversation,
+        session_configured,
+    } = conversation_manager.new_conversation(config.clone()).await?;
+    info!("Codex initialized with event: {session_configured:?}");
 
     // Initialize real-time logger if requested
     let realtime_logger = if let Some(ref log_dir) = log_session_dir {
@@ -168,28 +224,30 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     {
-        let codex = codex.clone();
+        let conversation = conversation.clone();
         tokio::spawn(async move {
             loop {
-                let interrupted = ctrl_c.notified();
                 tokio::select! {
-                    _ = interrupted => {
-                        // Forward an interrupt to the codex so it can abort any in‑flight task.
-                        let _ = codex
-                            .submit(
-                                Op::Interrupt,
-                            )
-                            .await;
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::debug!("Keyboard interrupt");
+                        // Immediately notify Codex to abort any in‑flight task.
+                        conversation.submit(Op::Interrupt).await.ok();
 
-                        // Exit the inner loop and return to the main input prompt.  The codex
+                        // Exit the inner loop and return to the main input prompt. The codex
                         // will emit a `TurnInterrupted` (Error) event which is drained later.
                         break;
                     }
-                    res = codex.next_event() => match res {
+                    res = conversation.next_event() => match res {
                         Ok(event) => {
                             debug!("Received event: {event:?}");
+
+                            let is_shutdown_complete = matches!(event.msg, EventMsg::ShutdownComplete);
                             if let Err(e) = tx.send(event) {
                                 error!("Error sending event: {e:?}");
+                                break;
+                            }
+                            if is_shutdown_complete {
+                                info!("Received shutdown event, exiting event loop.");
                                 break;
                             }
                         },
@@ -209,9 +267,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .into_iter()
             .map(|path| InputItem::LocalImage { path })
             .collect();
-        let initial_images_event_id = codex.submit(Op::UserInput { items }).await?;
+        let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
-        while let Ok(event) = codex.next_event().await {
+        while let Ok(event) = conversation.next_event().await {
             if event.id == initial_images_event_id
                 && matches!(
                     event.msg,
@@ -233,7 +291,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         let items: Vec<InputItem> = vec![InputItem::Text {
             text: current_prompt.clone(),
         }];
-        let task_id = codex.submit(Op::UserInput { items }).await?;
+        let task_id = conversation.submit(Op::UserInput { items }).await?;
         info!("Sent prompt with event ID: {task_id}");
 
         // Run the loop until the task is complete.
@@ -254,7 +312,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
             // Log event to real-time logger if enabled
             if let Some(ref logger) = realtime_logger {
-                if let Err(e) = logger.log_event(&event).await {
+                if let Err(e) = logger.log_event(&event as &Event).await {
                     error!("Failed to log event to realtime logger: {e:?}");
                 }
             }

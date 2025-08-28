@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 /// Logger that writes events to files in real-time for supervisor monitoring
 pub struct RealtimeLogger {
@@ -192,10 +193,10 @@ impl RealtimeLogger {
                     let mut log = self.conversation_log.lock().await;
                     log.push(serde_json::json!({
                         "role": "system",
-                        "content": format!("Tool call: {} ({})", tool.tool, tool.call_id),
+                        "content": format!("Tool call: {} ({})", tool.invocation.tool, tool.call_id),
                         "timestamp": timestamp.to_rfc3339(),
                         "event_type": "tool_call_begin",
-                        "tool_name": tool.tool,
+                        "tool_name": tool.invocation.tool,
                         "call_id": tool.call_id
                     }));
                 }
@@ -203,7 +204,7 @@ impl RealtimeLogger {
                 self.append_context(&format!(
                     "[{}] TOOL CALL: {} ({})\n",
                     timestamp.format("%H:%M:%S"),
-                    tool.tool,
+                    tool.invocation.tool,
                     tool.call_id
                 ))
                 .await?;
@@ -323,7 +324,7 @@ impl RealtimeLogger {
                 .await?;
             }
 
-            EventMsg::TaskStarted => {
+            EventMsg::TaskStarted(_) => {
                 self.append_context(&format!(
                     "[{}] 🚀 TASK STARTED\n",
                     timestamp.format("%H:%M:%S")
@@ -403,6 +404,12 @@ impl RealtimeLogger {
                     timestamp.format("%H:%M:%S")
                 ))
                 .await?;
+            }
+            
+            // Handle all other event types with default behavior
+            _ => {
+                // Log unhandled events for debugging
+                debug!("Unhandled event type in realtime logger: {:?}", event.msg);
             }
         }
 

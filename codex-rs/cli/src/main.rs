@@ -1,8 +1,17 @@
 use anyhow::Context;
+use clap::CommandFactory;
 use clap::Parser;
+use clap_complete::Shell;
+use clap_complete::generate;
+use codex_arg0::arg0_dispatch_or_else;
+use codex_chatgpt::apply_command::ApplyCommand;
+use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::run_login_status;
+use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
+use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -20,7 +29,11 @@ use crate::proto::ProtoCli;
     author,
     version,
     // If a sub‑command is given, ignore requirements of the default args.
-    subcommand_negates_reqs = true
+    subcommand_negates_reqs = true,
+    // The executable is sometimes invoked via a platform‑specific name like
+    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
+    // the generic `codex` command name that users run.
+    bin_name = "codex"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -39,8 +52,11 @@ enum Subcommand {
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
-    /// Login with ChatGPT.
+    /// Manage login.
     Login(LoginCommand),
+
+    /// Remove stored authentication credentials.
+    Logout(LogoutCommand),
 
     /// Experimental: run Codex as an MCP server.
     Mcp,
@@ -53,8 +69,26 @@ enum Subcommand {
     #[clap(visible_alias = "p")]
     Proto(ProtoCli),
 
+    /// Generate shell completion scripts.
+    Completion(CompletionCommand),
+
     /// Internal debugging commands.
     Debug(DebugArgs),
+
+    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    #[clap(visible_alias = "a")]
+    Apply(ApplyCommand),
+
+    /// Internal: generate TypeScript protocol bindings.
+    #[clap(hide = true)]
+    GenerateTs(GenerateTsCommand),
+}
+
+#[derive(Debug, Parser)]
+struct CompletionCommand {
+    /// Shell to generate completions for
+    #[clap(value_enum, default_value_t = Shell::Bash)]
+    shell: Shell,
 }
 
 #[derive(Debug, Parser)]
@@ -76,6 +110,35 @@ enum DebugCommand {
 struct LoginCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    #[arg(long = "api-key", value_name = "API_KEY")]
+    api_key: Option<String>,
+
+    #[command(subcommand)]
+    action: Option<LoginSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum LoginSubcommand {
+    /// Show login status.
+    Status,
+}
+
+#[derive(Debug, Parser)]
+struct LogoutCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct GenerateTsCommand {
+    /// Output directory where .ts files will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
+
+    /// Optional path to the Prettier executable to format generated files
+    #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
+    prettier: Option<PathBuf>,
 }
 
 #[derive(Debug, Parser)]
@@ -124,7 +187,7 @@ struct AutonomousCommand {
 }
 
 fn main() -> anyhow::Result<()> {
-    codex_linux_sandbox::run_with_sandbox(|codex_linux_sandbox_exe| async move {
+    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
         Ok(())
     })
@@ -137,14 +200,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         None => {
             let mut tui_cli = cli.interactive;
             prepend_config_flags(&mut tui_cli.config_overrides, cli.config_overrides);
-            codex_tui::run_main(tui_cli, codex_linux_sandbox_exe)?;
+            let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
+            if !usage.is_zero() {
+                println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe).await?;
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
         }
         Some(Subcommand::Autonomous(mut autonomous_cli)) => {
             prepend_config_flags(&mut autonomous_cli.config_overrides, cli.config_overrides);
@@ -152,11 +218,29 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
-            run_login_with_chatgpt(login_cli.config_overrides).await;
+            match login_cli.action {
+                Some(LoginSubcommand::Status) => {
+                    run_login_status(login_cli.config_overrides).await;
+                }
+                None => {
+                    if let Some(api_key) = login_cli.api_key {
+                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else {
+                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                    }
+                }
+            }
+        }
+        Some(Subcommand::Logout(mut logout_cli)) => {
+            prepend_config_flags(&mut logout_cli.config_overrides, cli.config_overrides);
+            run_logout(logout_cli.config_overrides).await;
         }
         Some(Subcommand::Proto(mut proto_cli)) => {
             prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);
             proto::run_main(proto_cli).await?;
+        }
+        Some(Subcommand::Completion(completion_cli)) => {
+            print_completion(completion_cli);
         }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(mut seatbelt_cli) => {
@@ -176,6 +260,13 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
         },
+        Some(Subcommand::Apply(mut apply_cli)) => {
+            prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
+            run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::GenerateTs(gen_cli)) => {
+            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
     }
 
     Ok(())
@@ -185,10 +276,12 @@ async fn run_autonomous_mode(
     autonomous_cli: AutonomousCommand,
     _codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
-    use codex_core::codex_wrapper::init_codex;
+    use codex_core::ConversationManager;
+    use codex_login::AuthManager;
     use codex_core::config::Config;
     use codex_core::protocol::InputItem;
     use codex_core::protocol::Op;
+    use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
     use tokio::time::sleep;
@@ -269,11 +362,7 @@ async fn run_autonomous_mode(
     let mut config_overrides = codex_core::config::ConfigOverrides::default();
     if autonomous_cli.full_auto {
         config_overrides.approval_policy = Some(codex_core::protocol::AskForApproval::OnFailure);
-        config_overrides.sandbox_policy =
-            Some(codex_core::protocol::SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![],
-                network_access: true,
-            });
+        config_overrides.sandbox_mode = Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite);
     }
 
     // Set specialist mode if provided
@@ -314,7 +403,11 @@ async fn run_autonomous_mode(
     );
 
     // Initialize codex session
-    let (codex, _init_event, _ctrl_c) = init_codex(config.clone()).await?;
+    let codex_home = codex_core::config::find_codex_home()?;
+    let auth_manager = Arc::new(AuthManager::new(codex_home, codex_login::AuthMode::ChatGPT));
+    let conversation_manager = ConversationManager::new(auth_manager);
+    let new_conversation = conversation_manager.new_conversation(config.clone()).await?;
+    let codex = new_conversation.conversation;
     println!("✅ Codex session initialized");
 
     // Initialize context accumulator and conversation log
@@ -700,7 +793,7 @@ async fn run_autonomous_mode(
             let input_items = vec![InputItem::Text {
                 text: final_user_prompt.clone(),
             }];
-            let submission_id = codex.submit(Op::UserInput { items: input_items }).await?;
+            let submission_id: String = codex.submit(Op::UserInput { items: input_items }).await?;
 
             // Collect codex response and tool calls
             let (codex_response, tool_calls, reasoning, tool_responses) =
@@ -874,7 +967,7 @@ async fn run_autonomous_mode(
 }
 
 async fn collect_codex_response_with_tools(
-    codex: &codex_core::Codex,
+    codex: &codex_core::CodexConversation,
     submission_id: &str,
     _full_auto: bool,
     driver_model: &str,
@@ -947,10 +1040,10 @@ async fn collect_codex_response_with_tools(
                             }));
                         }
                         EventMsg::McpToolCallBegin(tool) => {
-                            println!("🔧 Calling tool: {}", tool.tool);
+                            println!("🔧 Calling tool: {}", tool.invocation.tool);
 
                             // Check if this is a bugcrowd_submit call - always require external LLM approval
-                            if tool.tool == "bugcrowd_submit" {
+                            if tool.invocation.tool == "bugcrowd_submit" {
                                 println!(
                                     "🤖 Requesting approval from external LLM for bugcrowd_submit tool..."
                                 );
@@ -958,8 +1051,8 @@ async fn collect_codex_response_with_tools(
                                 // Use the specialized bugcrowd approval prompt
                                 let tool_approval_prompt = inject_bugcrowd_approval_variables(
                                     bugcrowd_approval_prompt_template,
-                                    &tool.tool,
-                                    &tool.arguments,
+                                    &tool.invocation.tool,
+                                    &tool.invocation.arguments,
                                 );
 
                                 match generate_user_prompt(
@@ -1025,8 +1118,8 @@ async fn collect_codex_response_with_tools(
                                 "id": tool.call_id,
                                 "type": "function",
                                 "function": {
-                                    "name": tool.tool,
-                                    "arguments": serde_json::to_string(&tool.arguments).unwrap_or_default()
+                                    "name": tool.invocation.tool,
+                                    "arguments": serde_json::to_string(&tool.invocation.arguments).unwrap_or_default()
                                 },
                                 "timestamp": chrono::Utc::now().to_rfc3339()
                             }));
@@ -1246,7 +1339,7 @@ async fn collect_codex_response_with_tools(
                                 println!("✅ Patch approval decision submitted");
                             }
                         }
-                        EventMsg::TaskStarted => {
+                        EventMsg::TaskStarted(_) => {
                             println!("📝 Event: TaskStarted");
                             // Add as a system event
                             tool_calls.push(serde_json::json!({
@@ -1496,41 +1589,59 @@ async fn generate_user_prompt(
 ) -> anyhow::Result<(String, Vec<serde_json::Value>)> {
     use codex_core::client::ModelClient;
     use codex_core::client_common::Prompt;
-    use codex_core::config_types::ReasoningEffort;
-    use codex_core::config_types::ReasoningSummary;
+    use codex_core::config::Config;
+    use codex_core::config::ConfigOverrides;
     use codex_core::model_provider_info::ModelProviderInfo;
     use codex_core::model_provider_info::WireApi;
-    use codex_core::models::ContentItem;
-    use codex_core::models::FunctionCallOutputPayload;
-    use codex_core::models::ResponseItem;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::FunctionCallOutputPayload;
+    use codex_protocol::models::ResponseItem;
     use futures::StreamExt;
-    use std::collections::HashMap;
+    use std::sync::Arc;
+    use uuid::Uuid;
+    use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary};
 
     println!("🔄 Calling {} with driver prompt...", model);
 
     // Create model provider info - use OpenRouter for consistency
     let provider = ModelProviderInfo {
         name: "OpenRouter".to_string(),
-        base_url: "https://openrouter.ai/api/v1".to_string(),
+        base_url: Some("https://openrouter.ai/api/v1".to_string()),
         env_key: Some("OPENROUTER_API_KEY".to_string()),
         env_key_instructions: None,
         wire_api: WireApi::Chat,
         query_params: None,
         env_http_headers: None,
         http_headers: None,
+        request_max_retries: Some(3),
+        stream_max_retries: Some(5),
+        stream_idle_timeout_ms: Some(30000),
+        requires_openai_auth: false,
     };
 
+    // Create minimal config for the driver model client
+    let driver_config = Arc::new(Config::load_with_cli_overrides(
+        vec![],
+        ConfigOverrides {
+            model: Some(model.to_string()),
+            ..Default::default()
+        }
+    )?);
+    
     // Create model client
     let client = ModelClient::new(
-        model,
+        driver_config,
+        None, // No auth manager for driver model
         provider,
         ReasoningEffort::Medium,
         ReasoningSummary::None,
         None, // No specialist for driver model
+        Uuid::new_v4(), // Generate session ID
     );
 
     // Create prompt with driver prompt as user message
     let user_message = ResponseItem::Message {
+        id: None,
         role: "user".to_string(),
         content: vec![ContentItem::InputText {
             text: driver_prompt.to_string(),
@@ -1544,6 +1655,7 @@ async fn generate_user_prompt(
     extra_tools.insert("write_note".to_string(), mcp_types::Tool {
         name: "write_note".to_string(),
         description: Some("Write a note to remember important information, observations, or decisions for future reference".to_string()),
+        title: Some("Write Note".to_string()),
         annotations: None,
         input_schema: mcp_types::ToolInputSchema {
             r#type: "object".to_string(),
@@ -1555,6 +1667,7 @@ async fn generate_user_prompt(
             })),
             required: Some(vec!["content".to_string()]),
         },
+        output_schema: None,
     });
 
     // Tool to read notes
@@ -1565,12 +1678,14 @@ async fn generate_user_prompt(
             description: Some(
                 "Read all existing notes to recall previous observations and decisions".to_string(),
             ),
+            title: Some("Read Notes".to_string()),
             annotations: None,
             input_schema: mcp_types::ToolInputSchema {
                 r#type: "object".to_string(),
                 properties: Some(serde_json::json!({})),
                 required: Some(vec![]),
             },
+            output_schema: None,
         },
     );
 
@@ -1606,6 +1721,8 @@ async fn generate_user_prompt(
                     "cleanup".to_string(),
                 ]),
             },
+            title: Some("Slack Webhook".to_string()),
+            output_schema: None,
         },
     );
 
@@ -1628,15 +1745,16 @@ async fn generate_user_prompt(
                 })),
                 required: Some(vec!["reason".to_string()]),
             },
+            title: Some("Finished".to_string()),
+            output_schema: None,
         },
     );
 
     let prompt = Prompt {
         input: vec![user_message.clone()],
-        prev_id: None,
-        user_instructions: None,
         store: false,
-        extra_tools,
+        tools: vec![], // Will be populated by OpenAI tools conversion
+        base_instructions_override: None,
     };
 
     // Make the API call
@@ -1665,6 +1783,7 @@ async fn generate_user_prompt(
                             }
                         }
                         ResponseItem::FunctionCall {
+                            id: _,
                             name,
                             arguments,
                             call_id,
@@ -1704,6 +1823,7 @@ async fn generate_user_prompt(
 
         // Add the assistant's response with tool calls
         conversation.push(ResponseItem::Message {
+            id: None,
             role: "assistant".to_string(),
             content: if response_text.trim().is_empty() {
                 vec![]
@@ -1717,6 +1837,7 @@ async fn generate_user_prompt(
         // Add function calls
         for tool_call in &tool_calls {
             conversation.push(ResponseItem::FunctionCall {
+                id: None,
                 name: tool_call["function"]["name"]
                     .as_str()
                     .unwrap_or("unknown")
@@ -1744,10 +1865,9 @@ async fn generate_user_prompt(
         // Make another call to get the follow-up instruction
         let follow_up_prompt = Prompt {
             input: conversation,
-            prev_id: None,
-            user_instructions: None,
             store: false,
-            extra_tools: HashMap::new(), // No tools for follow-up
+            tools: vec![], // No tools for follow-up
+            base_instructions_override: None,
         };
 
         let mut follow_up_stream = client
@@ -1993,4 +2113,10 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+fn print_completion(cmd: CompletionCommand) {
+    let mut app = MultitoolCli::command();
+    let name = "codex";
+    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }

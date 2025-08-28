@@ -1,198 +1,193 @@
 //! A live status indicator that shows the *latest* log line emitted by the
 //! application while the agent is processing a long‑running task.
 
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::AtomicUsize;
-use std::sync::atomic::Ordering;
-use std::thread;
 use std::time::Duration;
+use std::time::Instant;
 
+use codex_core::protocol::Op;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Alignment;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
-use ratatui::widgets::Block;
-use ratatui::widgets::BorderType;
-use ratatui::widgets::Borders;
-use ratatui::widgets::Padding;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-
-use codex_ansi_escape::ansi_escape_line;
+use crate::shimmer::shimmer_spans;
+use crate::tui::FrameRequester;
+use textwrap::Options as TwOptions;
+use textwrap::WordSplitter;
 
 pub(crate) struct StatusIndicatorWidget {
-    /// Latest text to display (truncated to the available width at render
-    /// time).
-    text: String,
+    /// Animated header text (defaults to "Working").
+    header: String,
+    /// Queued user messages to display under the status line.
+    queued_messages: Vec<String>,
 
-    /// Height in terminal rows – matches the height of the textarea at the
-    /// moment the task started so the UI does not jump when we toggle between
-    /// input mode and loading mode.
-    height: u16,
-
-    frame_idx: Arc<AtomicUsize>,
-    running: Arc<AtomicBool>,
-    // Keep one sender alive to prevent the channel from closing while the
-    // animation thread is still running. The field itself is currently not
-    // accessed anywhere, therefore the leading underscore silences the
-    // `dead_code` warning without affecting behavior.
-    _app_event_tx: AppEventSender,
+    start_time: Instant,
+    app_event_tx: AppEventSender,
+    frame_requester: FrameRequester,
 }
 
 impl StatusIndicatorWidget {
-    /// Create a new status indicator and start the animation timer.
-    pub(crate) fn new(app_event_tx: AppEventSender, height: u16) -> Self {
-        let frame_idx = Arc::new(AtomicUsize::new(0));
-        let running = Arc::new(AtomicBool::new(true));
-
-        // Animation thread.
-        {
-            let frame_idx_clone = Arc::clone(&frame_idx);
-            let running_clone = Arc::clone(&running);
-            let app_event_tx_clone = app_event_tx.clone();
-            thread::spawn(move || {
-                let mut counter = 0usize;
-                while running_clone.load(Ordering::Relaxed) {
-                    std::thread::sleep(Duration::from_millis(200));
-                    counter = counter.wrapping_add(1);
-                    frame_idx_clone.store(counter, Ordering::Relaxed);
-                    app_event_tx_clone.send(AppEvent::Redraw);
-                }
-            });
-        }
-
+    pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
-            text: String::from("waiting for logs…"),
-            height: height.max(3),
-            frame_idx,
-            running,
-            _app_event_tx: app_event_tx,
+            header: String::from("Working"),
+            queued_messages: Vec::new(),
+            start_time: Instant::now(),
+
+            app_event_tx,
+            frame_requester,
         }
     }
 
-    /// Preferred height in terminal rows.
-    pub(crate) fn get_height(&self) -> u16 {
-        self.height
+    pub fn desired_height(&self, width: u16) -> u16 {
+        // Status line + wrapped queued messages (up to 3 lines per message)
+        // + optional ellipsis line per truncated message + 1 spacer line
+        let inner_width = width.max(1) as usize;
+        let mut total: u16 = 1; // status line
+        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
+        if text_width > 0 {
+            let opts = TwOptions::new(text_width)
+                .break_words(false)
+                .word_splitter(WordSplitter::NoHyphenation);
+            for q in &self.queued_messages {
+                let wrapped = textwrap::wrap(q, &opts);
+                let lines = wrapped.len().min(3) as u16;
+                total = total.saturating_add(lines);
+                if wrapped.len() > 3 {
+                    total = total.saturating_add(1); // ellipsis line
+                }
+            }
+            if !self.queued_messages.is_empty() {
+                total = total.saturating_add(1); // keybind hint line
+            }
+        } else {
+            // At least one line per message if width is extremely narrow
+            total = total.saturating_add(self.queued_messages.len() as u16);
+        }
+        total.saturating_add(1) // spacer line
     }
 
-    /// Update the line that is displayed in the widget.
-    pub(crate) fn update_text(&mut self, text: String) {
-        self.text = text.replace(['\n', '\r'], " ");
+    pub(crate) fn interrupt(&self) {
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
-}
 
-impl Drop for StatusIndicatorWidget {
-    fn drop(&mut self) {
-        use std::sync::atomic::Ordering;
-        self.running.store(false, Ordering::Relaxed);
+    /// Update the animated header label (left of the brackets).
+    pub(crate) fn update_header(&mut self, header: String) {
+        if self.header != header {
+            self.header = header;
+        }
+    }
+
+    /// Replace the queued messages displayed beneath the header.
+    pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
+        self.queued_messages = queued;
+        // Ensure a redraw so changes are visible.
+        self.frame_requester.schedule_frame();
     }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let widget_style = Style::default();
-        let block = Block::default()
-            .padding(Padding::new(1, 0, 0, 0))
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded)
-            .border_style(widget_style.dim());
-        // Animated 3‑dot pattern inside brackets. The *active* dot is bold
-        // white, the others are dim.
-        const DOT_COUNT: usize = 3;
-        let idx = self.frame_idx.load(std::sync::atomic::Ordering::Relaxed);
-        let phase = idx % (DOT_COUNT * 2 - 2);
-        let active = if phase < DOT_COUNT {
-            phase
-        } else {
-            (DOT_COUNT * 2 - 2) - phase
-        };
-
-        let mut header_spans: Vec<Span<'static>> = Vec::new();
-
-        header_spans.push(Span::styled(
-            "Working ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        header_spans.push(Span::styled(
-            "[",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-        for i in 0..DOT_COUNT {
-            let style = if i == active {
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().dim()
-            };
-            header_spans.push(Span::styled(".", style));
+        if area.is_empty() {
+            return;
         }
 
-        header_spans.push(Span::styled(
-            "] ",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        ));
+        // Schedule next animation frame.
+        self.frame_requester
+            .schedule_frame_in(Duration::from_millis(32));
+        let elapsed = self.start_time.elapsed().as_secs();
 
-        // Ensure we do not overflow width.
-        let inner_width = block.inner(area).width as usize;
+        // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
+        let mut spans = vec![" ".into()];
+        spans.extend(shimmer_spans(&self.header));
+        spans.extend(vec![
+            " ".into(),
+            format!("({elapsed}s • ").dim(),
+            "Esc".dim().bold(),
+            " to interrupt)".dim(),
+        ]);
 
-        // Sanitize and colour‑strip the potentially colourful log text.  This
-        // ensures that **no** raw ANSI escape sequences leak into the
-        // back‑buffer which would otherwise cause cursor jumps or stray
-        // artefacts when the terminal is resized.
-        let line = ansi_escape_line(&self.text);
-        let mut sanitized_tail: String = line
-            .spans
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<Vec<_>>()
-            .join("");
-
-        // Truncate *after* stripping escape codes so width calculation is
-        // accurate. See UTF‑8 boundary comments above.
-        let header_len: usize = header_spans.iter().map(|s| s.content.len()).sum();
-
-        if header_len + sanitized_tail.len() > inner_width {
-            let available_bytes = inner_width.saturating_sub(header_len);
-
-            if sanitized_tail.is_char_boundary(available_bytes) {
-                sanitized_tail.truncate(available_bytes);
-            } else {
-                let mut idx = available_bytes;
-                while idx < sanitized_tail.len() && !sanitized_tail.is_char_boundary(idx) {
-                    idx += 1;
-                }
-                sanitized_tail.truncate(idx);
+        // Build lines: status, then queued messages, then spacer.
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(spans));
+        // Wrap queued messages using textwrap and show up to the first 3 lines per message.
+        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
+        let opts = TwOptions::new(text_width as usize)
+            .break_words(false)
+            .word_splitter(WordSplitter::NoHyphenation);
+        for q in &self.queued_messages {
+            let wrapped = textwrap::wrap(q, &opts);
+            for (i, piece) in wrapped.iter().take(3).enumerate() {
+                let prefix = if i == 0 { " ↳ " } else { "   " };
+                let content = format!("{prefix}{piece}");
+                lines.push(Line::from(content.dim().italic()));
+            }
+            if wrapped.len() > 3 {
+                lines.push(Line::from("   …".dim().italic()));
             }
         }
+        if !self.queued_messages.is_empty() {
+            lines.push(Line::from(vec!["   ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
+        }
 
-        let mut spans = header_spans;
-
-        // Re‑apply the DIM modifier so the tail appears visually subdued
-        // irrespective of the colour information preserved by
-        // `ansi_escape_line`.
-        spans.push(Span::styled(sanitized_tail, Style::default().dim()));
-
-        let paragraph = Paragraph::new(Line::from(spans))
-            .block(block)
-            .alignment(Alignment::Left);
+        let paragraph = Paragraph::new(lines);
         paragraph.render_ref(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use crate::app_event_sender::AppEventSender;
+    use insta::assert_snapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn renders_with_working_header() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_truncated() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn renders_with_queued_messages() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        w.set_queued_messages(vec!["first".to_string(), "second".to_string()]);
+
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(terminal.backend());
     }
 }

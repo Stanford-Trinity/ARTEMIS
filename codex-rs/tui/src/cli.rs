@@ -17,15 +17,26 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    /// Convenience flag to select the local open source model provider.
+    /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
+    /// running.
+    #[arg(long = "oss", default_value_t = false)]
+    pub oss: bool,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
+
+    /// Select the sandbox policy to use when executing model-generated shell
+    /// commands.
+    #[arg(long = "sandbox", short = 's')]
+    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 
     /// Configure when the model requires human approval before executing a command.
     #[arg(long = "ask-for-approval", short = 'a')]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, -c sandbox.mode=workspace-write).
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
@@ -33,6 +44,7 @@ pub struct Cli {
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
         long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
         default_value_t = false,
         conflicts_with_all = ["approval_policy", "full_auto"]
     )]
@@ -42,9 +54,9 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
-    /// Allow running Codex outside a Git repository.
-    #[arg(long = "skip-git-repo-check", default_value_t = false)]
-    pub skip_git_repo_check: bool,
+    /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
+    #[arg(long = "search", default_value_t = false)]
+    pub web_search: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
