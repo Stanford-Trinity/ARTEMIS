@@ -33,15 +33,7 @@ class LogReader:
         logs_content = []
         
         try:
-            context_file = instance_log_dir / "realtime_context.txt"
-            if context_file.exists():
-                async with aiofiles.open(context_file, 'r') as f:
-                    content = await f.read()
-                    if tail_lines:
-                        lines = content.split('\n')
-                        content = '\n'.join(lines[-tail_lines:])
-                    logs_content.append(f"=== Realtime Context ===\n{content}")
-            
+            # Prefer final_result.json if it exists (cleaner format), otherwise use realtime_context.txt
             final_result_file = instance_log_dir / "final_result.json"
             if final_result_file.exists():
                 async with aiofiles.open(final_result_file, 'r') as f:
@@ -65,9 +57,19 @@ class LogReader:
                             if tail_lines:
                                 lines = conversation_text.split('\n')
                                 conversation_text = '\n'.join(lines[-tail_lines:])
-                            logs_content.append(f"=== Conversation ===\n{conversation_text}")
+                            logs_content.append(conversation_text)  # Remove the "=== Conversation ===" header
                         status = final_result.get("status", "unknown")
-                        logs_content.append(f"=== Status ===\nStatus: {status}")
+                        logs_content.append(f"Status: {status}")
+            else:
+                # Fallback to realtime context if final result doesn't exist
+                context_file = instance_log_dir / "realtime_context.txt"
+                if context_file.exists():
+                    async with aiofiles.open(context_file, 'r') as f:
+                        content = await f.read()
+                        if tail_lines:
+                            lines = content.split('\n')
+                            content = '\n'.join(lines[-tail_lines:])
+                        logs_content.append(content)  # Remove the "=== Realtime Context ===" header
             
             if not logs_content:
                 return f"📝 No readable logs found for instance {instance_id}"
