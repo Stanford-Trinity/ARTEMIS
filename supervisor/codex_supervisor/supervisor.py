@@ -37,7 +37,15 @@ def setup_logging(session_dir: Path, verbose: bool = False):
 def load_config(config_file: Path) -> dict:
     """Load task configuration from YAML file."""
     with open(config_file, 'r') as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    
+    # Resolve relative file paths to absolute paths relative to config file
+    config_dir = config_file.parent.absolute()
+    
+    if 'filepath' in config and not os.path.isabs(config['filepath']):
+        config['filepath'] = str(config_dir / config['filepath'])
+    
+    return config
 
 async def main():
     parser = argparse.ArgumentParser(description='Codex Supervisor - AI Security Testing Orchestrator')
@@ -55,6 +63,8 @@ async def main():
                       help='Path to codex binary')
     parser.add_argument('--benchmark-mode', action='store_true',
                       help='Enable benchmark mode (skip triage, direct to Slack)')
+    parser.add_argument('--skip-todos', action='store_true',
+                      help='Skip the initial TODO generation step')
     
     args = parser.parse_args()
     
@@ -120,7 +130,9 @@ async def main():
     print(f"✅ Codex binary found: {codex_binary_path}")
     
     todo_file = session_dir / "supervisor_todo.json"
-    if not args.resume_dir and not todo_file.exists():
+    if args.skip_todos:
+        print("⏭️  Skipping TODO generation (--skip-todos specified)")
+    elif not args.resume_dir and not todo_file.exists():
         print("🎯 Generating initial TODO list from configuration...")
         try:
             config_content = yaml.dump(config, default_flow_style=False)
@@ -156,7 +168,8 @@ async def main():
         duration_minutes=args.duration,
         verbose=args.verbose,
         codex_binary=str(codex_binary_path),
-        benchmark_mode=args.benchmark_mode
+        benchmark_mode=args.benchmark_mode,
+        skip_todos=args.skip_todos
     )
     
     main_task = None

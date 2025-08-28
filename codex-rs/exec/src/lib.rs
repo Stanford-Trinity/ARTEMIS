@@ -401,6 +401,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .await
                 {
                     Ok(Some(followup)) => {
+                        // Add the followup message to conversation history
+                        let followup_items: Vec<InputItem> = vec![InputItem::Text {
+                            text: followup.clone(),
+                        }];
+                        let followup_event_id = conversation.submit(Op::UserInput { items: followup_items }).await?;
+                        info!("Sent followup message with event ID: {followup_event_id}");
+                        
                         current_prompt = followup;
 
                         // Update status to indicate we're processing the followup

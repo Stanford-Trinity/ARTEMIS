@@ -52,16 +52,23 @@ class ContextManager:
         total_tokens = 0
         
         for message in messages:
-            total_tokens += len(self.tokenizer.encode(message.get("role", "")))
-            total_tokens += len(self.tokenizer.encode(message.get("content", "")))
+            # Ensure all content is string before tokenizing
+            role = str(message.get("role", ""))
+            content = str(message.get("content", ""))
+            
+            total_tokens += len(self.tokenizer.encode(role))
+            total_tokens += len(self.tokenizer.encode(content))
             
             if "tool_calls" in message:
                 for tool_call in message["tool_calls"]:
-                    total_tokens += len(self.tokenizer.encode(tool_call.get("function", {}).get("name", "")))
-                    total_tokens += len(self.tokenizer.encode(tool_call.get("function", {}).get("arguments", "")))
+                    func_name = str(tool_call.get("function", {}).get("name", ""))
+                    func_args = str(tool_call.get("function", {}).get("arguments", ""))
+                    total_tokens += len(self.tokenizer.encode(func_name))
+                    total_tokens += len(self.tokenizer.encode(func_args))
             
             if "tool_call_id" in message:
-                total_tokens += len(self.tokenizer.encode(message["tool_call_id"]))
+                tool_id = str(message["tool_call_id"])
+                total_tokens += len(self.tokenizer.encode(tool_id))
         
         return total_tokens
     
