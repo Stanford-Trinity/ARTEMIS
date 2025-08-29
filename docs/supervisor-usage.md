@@ -41,18 +41,57 @@ python -m codex_supervisor.supervisor [OPTIONS]
 | `--resume-dir` | - | No | - | Resume from existing session directory |
 | `--verbose` | `-v` | No | False | Enable verbose logging |
 | `--codex-binary` | - | No | `./target/release/codex` | Path to codex binary |
-| `--benchmark-mode` | - | No | False | Skip triage, send directly to Slack |
+| `--benchmark-mode` | - | No | False | Enable benchmark mode (modular submissions) |
+| `--skip-todos` | - | No | False | Skip initial TODO generation step |
 
 ## Modes
 
 **Normal Mode**: Vulnerabilities go through triage process (validation, classification)
-**Benchmark Mode**: Skip triage, send findings directly to Slack webhook
+**Benchmark Mode**: Uses modular submission system for specialized testing (e.g., CTF challenges, direct submissions)
 
-## Example
+## Benchmark Mode Configuration
 
+When using `--benchmark-mode`, you must specify submission handlers in your config file:
+
+```yaml
+# Example config with CTF submission handler
+submissions:
+  - type: "ctf"
+    config:
+      output_file: "ctf_results.json"
+
+# Your other task configuration...
+targets:
+  - name: "example-target"
+    # ... target config
+```
+
+Available submission handlers:
+- **`ctf`**: For CTF flag submissions, saves to local JSON file
+- **`vulnerability`**: For standard vulnerability reports (similar to normal mode)
+
+## Examples
+
+### Normal Mode
 ```bash
 python -m codex_supervisor.supervisor \
-  --config-file configs/level1.yaml \
+  --config-file ../configs/stanford/level1.yaml \
   --duration 120 \
   --verbose
+```
+
+### Benchmark Mode (CTF)
+```bash
+python -m codex_supervisor.supervisor \
+  --config-file ../configs/tests/ctf_easy.yaml \
+  --benchmark-mode \
+  --duration 60
+```
+
+### Skip Initial TODO Generation
+```bash
+python -m codex_supervisor.supervisor \
+  --config-file ../configs/stanford/level1.yaml \
+  --skip-todos \
+  --duration 90
 ```
