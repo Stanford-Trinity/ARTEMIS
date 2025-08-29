@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::debug;
 
 /// Logger that writes events to files in real-time for supervisor monitoring
 pub struct RealtimeLogger {
@@ -15,6 +16,8 @@ pub struct RealtimeLogger {
     instance_id: String,
     model: Option<String>,
     specialist: Option<String>,
+    system_prompt: Option<String>,
+    tools: Option<serde_json::Value>,
     conversation_log: Arc<Mutex<Vec<serde_json::Value>>>,
     context_file: Arc<Mutex<std::fs::File>>,
     start_time: DateTime<Utc>,
@@ -27,6 +30,8 @@ impl RealtimeLogger {
         initial_prompt: &str,
         model: Option<String>,
         specialist: Option<String>,
+        system_prompt: Option<String>,
+        tools: Option<serde_json::Value>,
     ) -> anyhow::Result<Self> {
         // Create log directory if it doesn't exist
         std::fs::create_dir_all(&log_dir)?;
@@ -72,6 +77,8 @@ impl RealtimeLogger {
             instance_id: instance_id.clone(),
             model,
             specialist,
+            system_prompt,
+            tools,
             conversation_log: conversation_log.clone(),
             context_file,
             start_time,
@@ -192,10 +199,10 @@ impl RealtimeLogger {
                     let mut log = self.conversation_log.lock().await;
                     log.push(serde_json::json!({
                         "role": "system",
-                        "content": format!("Tool call: {} ({})", tool.tool, tool.call_id),
+                        "content": format!("Tool call: {} ({})", tool.invocation.tool, tool.call_id),
                         "timestamp": timestamp.to_rfc3339(),
                         "event_type": "tool_call_begin",
-                        "tool_name": tool.tool,
+                        "tool_name": tool.invocation.tool,
                         "call_id": tool.call_id
                     }));
                 }
@@ -203,7 +210,7 @@ impl RealtimeLogger {
                 self.append_context(&format!(
                     "[{}] TOOL CALL: {} ({})\n",
                     timestamp.format("%H:%M:%S"),
-                    tool.tool,
+                    tool.invocation.tool,
                     tool.call_id
                 ))
                 .await?;
@@ -323,7 +330,7 @@ impl RealtimeLogger {
                 .await?;
             }
 
-            EventMsg::TaskStarted => {
+            EventMsg::TaskStarted(_) => {
                 self.append_context(&format!(
                     "[{}] 🚀 TASK STARTED\n",
                     timestamp.format("%H:%M:%S")
@@ -404,6 +411,12 @@ impl RealtimeLogger {
                 ))
                 .await?;
             }
+            
+            // Handle all other event types with default behavior
+            _ => {
+                // Log unhandled events for debugging
+                debug!("Unhandled event type in realtime logger: {:?}", event.msg);
+            }
         }
 
         Ok(())
@@ -438,6 +451,16 @@ impl RealtimeLogger {
         // Add specialist information if available
         if let Some(ref specialist_name) = self.specialist {
             final_result["specialist"] = serde_json::Value::String(specialist_name.clone());
+        }
+
+        // Add system prompt if available
+        if let Some(ref system_prompt) = self.system_prompt {
+            final_result["system_prompt"] = serde_json::Value::String(system_prompt.clone());
+        }
+
+        // Add tools if available
+        if let Some(ref tools) = self.tools {
+            final_result["tools"] = tools.clone();
         }
 
         let result_path = self.log_dir.join("final_result.json");

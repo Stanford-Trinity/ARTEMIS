@@ -27,7 +27,7 @@ class SupervisorOrchestrator:
     
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
-                 benchmark_mode: bool = False):
+                 benchmark_mode: bool = False, skip_todos: bool = False):
         
         self.config = config
         self.session_dir = session_dir
@@ -36,6 +36,7 @@ class SupervisorOrchestrator:
         self.verbose = verbose
         self.codex_binary = codex_binary
         self.benchmark_mode = benchmark_mode
+        self.skip_todos = skip_todos
         
         self.instance_manager = InstanceManager(session_dir, codex_binary)
         self.log_reader = LogReader(session_dir, self.instance_manager)
@@ -55,13 +56,17 @@ class SupervisorOrchestrator:
                 codex_binary=codex_binary
             )
         
+        # Extract and remove submission config from main config
+        submission_config = config.pop('submission_config', {})
+        
         self.tools = SupervisorTools(
             self.instance_manager, 
             self.log_reader, 
             session_dir, 
             context_manager=self.context_manager, 
             benchmark_mode=benchmark_mode,
-            triage_manager=self.triage_manager
+            triage_manager=self.triage_manager,
+            submission_config=submission_config
         )
         
         self.continuation_count = 0
@@ -89,11 +94,11 @@ class SupervisorOrchestrator:
         
         self.conversation_history.append({
             "role": "system",
-            "content": self.prompt.get_system_prompt()
+            "content": self.prompt.get_system_prompt(skip_todos=self.skip_todos)
         })
         
         initial_context = self.prompt.format_initial_context(
-            self.config, self.duration_minutes, str(self.session_dir)
+            self.config, self.duration_minutes, str(self.session_dir), skip_todos=self.skip_todos
         )
         
         self.conversation_history.append({
@@ -276,14 +281,14 @@ class SupervisorOrchestrator:
         
         self.conversation_history.append({
             "role": "system",
-            "content": self.prompt.get_system_prompt()
+            "content": self.prompt.get_system_prompt(skip_todos=self.skip_todos)
         })
         
         vulnerabilities_content = await self._load_vulnerabilities_log()
         
         time_remaining = end_time - datetime.now(timezone.utc)
         initial_context = self.prompt.format_initial_context(
-            self.config, self.duration_minutes, str(self.session_dir)
+            self.config, self.duration_minutes, str(self.session_dir), skip_todos=self.skip_todos
         )
         
         continuation_context = get_continuation_context_prompt(

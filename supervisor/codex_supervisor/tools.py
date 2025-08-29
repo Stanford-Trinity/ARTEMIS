@@ -11,17 +11,40 @@ from typing import Dict, Any, List
 import aiofiles
 
 class SupervisorTools:
-    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None):
+    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None, submission_config=None):
         self.instance_manager = instance_manager
         self.log_reader = log_reader
         self.session_dir = session_dir
         self.context_manager = context_manager
         self.benchmark_mode = benchmark_mode
         self.triage_manager = triage_manager
+        self.submission_config = submission_config or {}
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
         self.tokenizer = tiktoken.get_encoding("o200k_base")
+        
+        # Initialize submission handlers
+        self._init_submission_handlers()
+
+    def _init_submission_handlers(self):
+        """Initialize submission handlers based on config."""
+        from .submissions.registry import registry
+        from .submissions import CTFSubmissionHandler, VulnerabilitySubmissionHandler
+        
+        # Register handlers
+        registry.register("ctf", CTFSubmissionHandler)
+        registry.register("vulnerability", VulnerabilitySubmissionHandler)
+        
+        # Create handler instance if benchmark mode is enabled
+        self.submission_handler = None
+        if self.benchmark_mode:
+            submission_type = self.submission_config.get("type", "vulnerability")  # Default to vulnerability for backwards compatibility
+            self.submission_handler = registry.create_handler(
+                submission_type, 
+                self.session_dir, 
+                self.submission_config
+            )
 
     def _count_text_tokens(self, text: str) -> int:
         """Count tokens in a text string."""
@@ -63,7 +86,7 @@ class SupervisorTools:
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
         """Get OpenAI-compatible tool definitions."""
-        return [
+        tools = [
             {
                 "type": "function",
                 "function": {
@@ -399,6 +422,37 @@ class SupervisorTools:
                 }
             }
         ]
+        
+        # Add appropriate submission tools based on mode
+        if self.benchmark_mode and self.submission_handler:
+            # In benchmark mode: use submission handler tool
+            submission_tool = self.submission_handler.get_submission_schema()
+            tools.append(submission_tool)
+        elif not self.benchmark_mode:
+            # In normal mode: add the regular submit tool
+            tools.append({
+                "type": "function",
+                "function": {
+                    "name": "submit",
+                    "description": "Submit a vulnerability report for processing",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "Vulnerability title"},
+                            "asset": {"type": "string", "description": "Affected asset"},
+                            "vuln_type": {"type": "string", "description": "Type of vulnerability"},
+                            "severity": {"type": "string", "description": "Severity rating"},
+                            "description": {"type": "string", "description": "Detailed description"},
+                            "repro_steps": {"type": "string", "description": "Reproduction steps"},
+                            "impact": {"type": "string", "description": "Impact summary"},
+                            "cleanup": {"type": "string", "description": "Cleanup instructions"}
+                        },
+                        "required": ["title", "asset", "vuln_type", "severity", "description", "repro_steps", "impact", "cleanup"]
+                    }
+                }
+            })
+        
+        return tools
 
     async def handle_tool_call(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Handle a supervisor tool call."""
@@ -417,8 +471,15 @@ class SupervisorTools:
                 return await self._write_supervisor_note(arguments)
             elif tool_name == "read_supervisor_notes":
                 return await self._read_supervisor_notes(arguments)
-            elif tool_name == "submit":
+            elif tool_name == "submit" and not self.benchmark_mode:
+                # Normal mode: use triage manager
                 return await self._submit(arguments)
+            elif self.benchmark_mode and self.submission_handler:
+                # Benchmark mode: check if this is a submission handler tool call
+                schema = self.submission_handler.get_submission_schema()
+                if schema.get("function", {}).get("name") == tool_name:
+                    result = await self.submission_handler.submit(arguments)
+                    return result.message
             elif tool_name == "update_supervisor_todo":
                 return await self._update_supervisor_todo(arguments)
             elif tool_name == "read_supervisor_todo":
@@ -578,71 +639,6 @@ class SupervisorTools:
         else:
             return f"❌ Triage manager not available - vulnerability cannot be submitted: {args['title']}"
     
-    async def _send_directly_to_slack(self, payload: Dict[str, Any]) -> str:
-        """Send vulnerability report directly to Slack (benchmark mode)."""
-        webhook_url = "https://hooks.slack.com/triggers/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"
-        
-        try:
-            # Use curl to post to webhook
-            process = await asyncio.create_subprocess_exec(
-                "curl", "-X", "POST",
-                "-H", "Content-Type: application/json",
-                "--data", json.dumps(payload),
-                webhook_url,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            
-            if process.returncode == 0:
-                logging.info("✅ Slack vulnerability report sent (benchmark mode)")
-                
-                # Log vulnerability to running file
-                await self._log_vulnerability_submission(payload)
-                
-                return f"✅ Vulnerability report sent to Slack: {payload['title']} (benchmark mode)"
-            else:
-                error_msg = stderr.decode() if stderr else "Unknown error"
-                return f"❌ Failed to send Slack report: {error_msg}"
-                
-        except Exception as e:
-            return f"❌ Error sending Slack report: {e}"
-    
-    async def _log_vulnerability_submission(self, payload: Dict[str, Any]) -> None:
-        """Log vulnerability submission to running vulnerability log file."""
-        vuln_log_file = self.session_dir / "vulnerabilities_found.log"
-        
-        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        log_entry = f"""
-=== VULNERABILITY SUBMITTED TO SLACK ===
-Timestamp: {timestamp}
-Title: {payload['title']}
-Asset: {payload['asset']}
-Type: {payload['vuln_type']}
-Severity: {payload['severity']}
-
-Description:
-{payload['description']}
-
-Reproduction Steps:
-{payload['repro_steps']}
-
-Impact:
-{payload['impact']}
-
-Cleanup:
-{payload['cleanup']}
-================================================
-
-"""
-        
-        try:
-            async with aiofiles.open(vuln_log_file, 'a') as f:
-                await f.write(log_entry)
-            logging.info(f"📝 Logged vulnerability to {vuln_log_file}")
-        except Exception as e:
-            logging.error(f"❌ Failed to log vulnerability: {e}")
             
     async def _load_todo_list(self) -> List[Dict[str, Any]]:
         """Load the supervisor todo list from file."""

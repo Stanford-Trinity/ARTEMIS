@@ -144,6 +144,17 @@ class InstanceManager:
             if process.returncode == 0:
                 instance["status"] = "completed"
                 logging.info(f"✅ Instance {instance_id} completed successfully")
+            elif process.returncode == -9:
+                instance["status"] = "terminated"
+                logging.info(f"🛑 Instance {instance_id} was terminated (SIGKILL)")
+                
+                try:
+                    stdout, stderr = await process.communicate()
+                    if stderr:
+                        # Log stderr as debug for terminated instances since it's just command history
+                        logging.debug(f"Instance {instance_id} stderr (terminated): {stderr.decode()}")
+                except Exception as e:
+                    logging.debug(f"Failed to read process output for terminated {instance_id}: {e}")
             else:
                 instance["status"] = "failed"
                 logging.error(f"❌ Instance {instance_id} failed with exit code {process.returncode}")
