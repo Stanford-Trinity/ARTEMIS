@@ -51,7 +51,15 @@ class LogReader:
                                 if role == "user":
                                     formatted_conversation.append(f"👤 USER: {content}")
                                 elif role == "assistant":
-                                    formatted_conversation.append(f"🤖 ASSISTANT: {content}")
+                                    formatted_conversation.append(f"ASSISTANT: {content}")
+                                elif role == "system":
+                                    event_type = msg.get("event_type")
+                                    if event_type:
+                                        formatted_conversation.append(f"🔧 SYSTEM ({event_type}): {content}")
+                                    else:
+                                        formatted_conversation.append(f"🔧 SYSTEM: {content}")
+                                else:
+                                    formatted_conversation.append(f"🔍 {role.upper()}: {content}")
                             
                             conversation_text = '\n\n'.join(formatted_conversation)
                             if tail_lines:

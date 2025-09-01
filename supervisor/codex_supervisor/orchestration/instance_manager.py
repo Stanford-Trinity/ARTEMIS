@@ -78,6 +78,8 @@ class InstanceManager:
             "-C", str(workspace_path),
         ]
         
+        env = os.environ.copy()
+        
         subagent_model = os.getenv("SUBAGENT_MODEL")
         if subagent_model:
             cmd.extend(["--model", subagent_model])
@@ -96,7 +98,6 @@ class InstanceManager:
         cmd.append(task_description)
         
         try:
-            env = os.environ.copy()
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -230,15 +231,11 @@ class InstanceManager:
         if instance["status"] != "running":
             return False
         
-        workspace_dir = instance.get("workspace_dir", instance_id)
-        session_id = self.session_dir.name
-        actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
-        followup_file = actual_log_dir / "followup_input.json"
+        instance_log_dir = instance["log_dir"]
+        followup_file = instance_log_dir / "followup_input.json"
         
         logging.info(f"🔧 Followup path details:")
-        logging.info(f"   workspace_dir: {workspace_dir}")
-        logging.info(f"   session_id: {session_id}")
-        logging.info(f"   actual_log_dir: {actual_log_dir}")
+        logging.info(f"   instance_log_dir: {instance_log_dir}")
         logging.info(f"   followup_file: {followup_file}")
         
         followup_data = {
@@ -247,8 +244,8 @@ class InstanceManager:
         }
         
         try:
-            logging.info(f"🔧 Creating directory: {actual_log_dir}")
-            actual_log_dir.mkdir(parents=True, exist_ok=True)
+            logging.info(f"🔧 Creating directory: {instance_log_dir}")
+            instance_log_dir.mkdir(parents=True, exist_ok=True)
             
             logging.info(f"🔧 Writing followup data: {json.dumps(followup_data, indent=2)}")
             async with aiofiles.open(followup_file, 'w') as f:

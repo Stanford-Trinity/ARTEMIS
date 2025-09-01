@@ -471,15 +471,6 @@ class SupervisorTools:
                 return await self._write_supervisor_note(arguments)
             elif tool_name == "read_supervisor_notes":
                 return await self._read_supervisor_notes(arguments)
-            elif tool_name == "submit" and not self.benchmark_mode:
-                # Normal mode: use triage manager
-                return await self._submit(arguments)
-            elif self.benchmark_mode and self.submission_handler:
-                # Benchmark mode: check if this is a submission handler tool call
-                schema = self.submission_handler.get_submission_schema()
-                if schema.get("function", {}).get("name") == tool_name:
-                    result = await self.submission_handler.submit(arguments)
-                    return result.message
             elif tool_name == "update_supervisor_todo":
                 return await self._update_supervisor_todo(arguments)
             elif tool_name == "read_supervisor_todo":
@@ -494,11 +485,21 @@ class SupervisorTools:
                 return await self._web_search(arguments)
             elif tool_name == "finished":
                 return await self._finished(arguments)
+            elif tool_name == "submit" and not self.benchmark_mode:
+                return await self._submit(arguments)
+            elif self.benchmark_mode and self.submission_handler:
+                # Benchmark mode: check if this is a submission handler tool call
+                schema = self.submission_handler.get_submission_schema()
+                if schema.get("function", {}).get("name") == tool_name:
+                    result = await self.submission_handler.submit(arguments)
+                    return result.message
             else:
                 return f"Unknown tool: {tool_name}"
         except Exception as e:
+            import traceback
             logging.error(f"Error in tool {tool_name}: {e}")
-            return f"Error: {e}"
+            logging.error(f"Full traceback: {traceback.format_exc()}")
+            return f"Error in tool {tool_name}: {e}\n\nFull traceback:\n{traceback.format_exc()}"
 
     async def _spawn_codex(self, args: Dict[str, Any]) -> str:
         """Spawn a new codex instance."""
@@ -779,8 +780,8 @@ class SupervisorTools:
                 if not description:
                     return "❌ Description is required for adding todo items"
                 
-                # Generate new ID
-                new_id = str(uuid.uuid4())[:8]
+                # Use provided item_id or generate new ID
+                new_id = item_id if item_id else str(uuid.uuid4())[:8]
                 
                 new_todo = {
                     "id": new_id,
@@ -941,9 +942,9 @@ class SupervisorTools:
         if instance["status"] != "running":
             return f"❌ Instance {instance_id} is not running (status: {instance['status']})"
         
-        # The actual log directory where codex writes files (codex creates nested structure)
-        workspace_dir = instance.get("workspace_dir", instance_id)
-        session_id = self.session_dir.name  # Extract session_id from session_dir
+        # Use the duplicated path structure where codex actually writes files
+        workspace_dir = instance["workspace_dir"]
+        session_id = self.session_dir.name  # Extract session_id from session_dir path
         actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
         status_file = actual_log_dir / "status.json"
         
@@ -1006,21 +1007,22 @@ class SupervisorTools:
                         # Always break on waiting_for_followup regardless of expected status
                         if current_status == "waiting_for_followup":
                             logging.info(f"🔄 Instance {instance_id} needs followup, breaking wait loop")
-                            # Read the latest response from realtime conversation file
-                            conversation_file = actual_log_dir / "realtime_conversation.json"
+                            # Read the latest response from final_result.json
+                            final_result_file = actual_log_dir / "final_result.json"
                             last_response = "No response available"
-                            if conversation_file.exists():
+                            if final_result_file.exists():
                                 try:
-                                    async with aiofiles.open(conversation_file, 'r') as f:
-                                        conversation = json.loads(await f.read())
+                                    async with aiofiles.open(final_result_file, 'r') as f:
+                                        final_result = json.loads(await f.read())
                                     
-                                    # Get the last assistant message
+                                    # Get the last assistant message from conversation
+                                    conversation = final_result.get("conversation", [])
                                     for msg in reversed(conversation):
                                         if msg.get("role") == "assistant":
                                             last_response = msg.get("content", "")[:200] + ("..." if len(msg.get("content", "")) > 200 else "")
                                             break
                                 except Exception as e:
-                                    logging.error(f"Error reading conversation for {instance_id}: {e}")
+                                    logging.error(f"Error reading final_result for {instance_id}: {e}")
                             
                             return f"🔄 Instance {instance_id} is waiting for followup. Last response: '{last_response}'. Use send_followup to continue."
                         

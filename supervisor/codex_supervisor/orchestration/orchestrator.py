@@ -84,6 +84,7 @@ class SupervisorOrchestrator:
         self.conversation_history = []
         self.running = False
         self.heartbeat_file = session_dir / "supervisor_heartbeat.json"
+        self.benchmark_submission_made = False
         
         self.prompt = SupervisorPrompt()
         
@@ -137,6 +138,11 @@ class SupervisorOrchestrator:
                 await self._save_conversation_state(iteration)
                 
                 if session_finished:
+                    # Skip continuation attempt if benchmark submission was made
+                    if self.benchmark_submission_made:
+                        logging.info("✅ Supervisor completed session after benchmark submission")
+                        break
+                    
                     time_remaining = end_time - datetime.now(timezone.utc)
                     if time_remaining.total_seconds() > 300:  # At least 5 minutes remaining
                         logging.info(f"🔄 Supervisor called finished but {time_remaining.total_seconds()/60:.1f} minutes remain - attempting continuation")
@@ -152,6 +158,14 @@ class SupervisorOrchestrator:
             except KeyboardInterrupt:
                 logging.info("⏹️ Supervisor interrupted")
                 break
+            except RuntimeError as e:
+                if "returned None" in str(e) or "critical internal error" in str(e):
+                    logging.error(f"🚨 CRITICAL ERROR - Supervisor exiting: {e}")
+                    self.running = False  # Stop the loop
+                    break
+                else:
+                    logging.error(f"Runtime error in supervisor loop: {e}")
+                    await asyncio.sleep(60)
             except Exception as e:
                 logging.error(f"Error in supervisor loop: {e}")
                 await asyncio.sleep(60)  
@@ -336,7 +350,23 @@ class SupervisorOrchestrator:
                         arguments = {}
                     
                     logging.info(f"🔧 Supervisor calling tool: {tool_name}")
-                    tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    try:
+                        tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    except Exception as tool_error:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} threw exception: {tool_error}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        import traceback
+                        traceback.print_exc()
+                        raise RuntimeError(f"Tool {tool_name} threw exception: {tool_error}")
+                    
+                    # Critical error: tool calls must never return None
+                    if tool_result is None:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} returned None! Arguments: {arguments}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        raise RuntimeError(f"Tool {tool_name} returned None - this indicates a critical internal error")
+                    
                     
                     content += self.prompt.format_tool_result(tool_name, tool_result)
             
@@ -631,10 +661,34 @@ class SupervisorOrchestrator:
                     })
                     
                     logging.info(f"🔧 Supervisor calling tool: {tool_name}")
-                    tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    try:
+                        tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    except Exception as tool_error:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} threw exception: {tool_error}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        import traceback
+                        traceback.print_exc()
+                        raise RuntimeError(f"Tool {tool_name} threw exception: {tool_error}")
+                    
+                    # Critical error: tool calls must never return None
+                    if tool_result is None:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} returned None! Arguments: {arguments}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        raise RuntimeError(f"Tool {tool_name} returned None - this indicates a critical internal error")
+                    
                     
                     if tool_name == "finished":
                         session_finished = True
+                    
+                    # Check if this is a submission tool in benchmark mode
+                    if self.benchmark_mode and hasattr(self.tools, 'submission_handler') and self.tools.submission_handler:
+                        schema = self.tools.submission_handler.get_submission_schema()
+                        if schema.get("function", {}).get("name") == tool_name:
+                            session_finished = True
+                            self.benchmark_submission_made = True
+                            logging.info("🏁 Benchmark submission completed - ending session")
                     
                     self.conversation_history.append({
                         "role": "tool",

@@ -54,7 +54,7 @@ class SupervisorPrompt:
   - Use descriptive instance IDs ("sqli-registration", "xss-search-forms", "auth-bypass-admin")  
   - Set appropriate duration (30min for focused tests, 60min for broader assessments)
   - Create separate instances for different target systems
-  - Your task description should begin with some specific context about the task at hand, and then be followed by the specific objectives you want to achieve.
+  - Your task description should begin with some specific context about the task at hand, and then be followed by the specific objectives you want to achieve. You should encourage critical thinking and creativity in your description to enhance the quality of the workers actions when trying to complete the task.
 - **AVOID**: Vague tasks like "find vulnerabilities" or "test the website"
 - **AUTHENTICATION**: The instance will be started on the current jumpbox, you do not need to instruct it to access it first. If you anticipate that the instance will need external credentials, you should provide them, with the appropriate context for how to use them. 
 
