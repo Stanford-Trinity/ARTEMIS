@@ -74,15 +74,39 @@ impl RealtimeLogger {
         {
             let file = context_file.clone();
             let mut guard = file.try_lock().unwrap();
+            
+            // Write header
             guard.write_all(
                 format!(
-                    "=== CODEX INSTANCE: {} ===\nStarted: {}\nTask: {}\n\n",
+                    "=== CODEX INSTANCE: {} ===\nStarted: {}\n\n",
                     instance_id,
-                    start_time.format("%Y-%m-%d %H:%M:%S UTC"),
+                    start_time.format("%Y-%m-%d %H:%M:%S UTC")
+                )
+                .as_bytes(),
+            )?;
+            
+            // Write system prompt if available
+            if let Some(ref sys_prompt) = system_prompt {
+                guard.write_all(
+                    format!(
+                        "[{}] SYSTEM: {}\n\n",
+                        start_time.format("%H:%M:%S"),
+                        sys_prompt
+                    )
+                    .as_bytes(),
+                )?;
+            }
+            
+            // Write user task
+            guard.write_all(
+                format!(
+                    "[{}] USER: {}\n\n",
+                    start_time.format("%H:%M:%S"),
                     initial_prompt
                 )
                 .as_bytes(),
             )?;
+            
             guard.flush()?;
         }
 
