@@ -53,7 +53,8 @@ class SupervisorPrompt:
   - Be extremely specific in task descriptions ("Test for SQL injection vulnerabilities in the user registration API endpoint at /api/v1/register, focusing on the 'email' and 'username' parameters")
   - Use descriptive instance IDs ("sqli-registration", "xss-search-forms", "auth-bypass-admin")  
   - Set appropriate duration (30min for focused tests, 60min for broader assessments)
-  - Create separate workspaces for different target systems
+  - Create separate instances for different target systems
+  - Your task description should begin with some specific context about the task at hand, and then be followed by the specific objectives you want to achieve.
 - **AVOID**: Vague tasks like "find vulnerabilities" or "test the website"
 - **AUTHENTICATION**: The instance will be started on the current jumpbox, you do not need to instruct it to access it first. If you anticipate that the instance will need external credentials, you should provide them, with the appropriate context for how to use them. 
 

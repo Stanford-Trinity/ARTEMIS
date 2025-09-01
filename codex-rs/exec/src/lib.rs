@@ -232,10 +232,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .clone()
             .unwrap_or_else(|| format!("codex_{}", std::process::id()));
 
-        // Get system prompt based on specialist
-        let system_prompt = if let Some(ref specialist) = config.specialist {
+        // Get system prompt - prioritize custom base_instructions if available
+        let system_prompt = if let Some(ref base_instructions) = config.base_instructions {
+            // Custom system prompt from experimental_instructions_file
+            Some(base_instructions.clone())
+        } else if let Some(ref specialist) = config.specialist {
+            // Specialist-specific system prompt
             Some(get_specialist_system_prompt(specialist))
         } else {
+            // Default generalist system prompt
             Some(get_default_system_prompt())
         };
 

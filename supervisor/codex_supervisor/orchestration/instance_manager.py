@@ -9,15 +9,22 @@ from pathlib import Path
 from typing import Dict, Any
 
 import aiofiles
+from .router import TaskRouter
+from .prompt_generator import PromptGenerator
 
 
 class InstanceManager:
     """Manages codex instances spawned by the supervisor."""
     
-    def __init__(self, session_dir: Path, codex_binary: str):
+    def __init__(self, session_dir: Path, codex_binary: str, use_prompt_generation: bool = False):
         self.session_dir = session_dir
         self.codex_binary = codex_binary
+        self.use_prompt_generation = use_prompt_generation
         self.instances: Dict[str, Dict[str, Any]] = {}
+        
+        # Initialize router and prompt generator
+        self.router = TaskRouter()
+        self.prompt_generator = PromptGenerator() if use_prompt_generation else None
     
     async def spawn_instance(self, instance_id: str, task_description: str, 
                            workspace_dir: str, duration_minutes: int, specialist: str = "generalist") -> bool:
@@ -29,6 +36,36 @@ class InstanceManager:
         workspace_name = Path(workspace_dir).name
         workspace_path = self.session_dir / "workspaces" / workspace_name
         workspace_path.mkdir(parents=True, exist_ok=True)
+        
+        # Determine if we should use prompt generation or routing
+        custom_prompt_file = None
+        if self.use_prompt_generation and self.prompt_generator:
+            # Generate custom system prompt
+            success, custom_prompt = await self.prompt_generator.generate_system_prompt(task_description)
+            if success:
+                # Write custom prompt to temporary file
+                custom_prompt_file = workspace_path / f"custom_prompt_{instance_id}.md"
+                try:
+                    with open(custom_prompt_file, 'w', encoding='utf-8') as f:
+                        f.write(custom_prompt)
+                    logging.info(f"✅ Generated custom prompt for instance {instance_id}")
+                except Exception as e:
+                    logging.error(f"❌ Failed to write custom prompt file: {e}")
+                    custom_prompt_file = None
+            else:
+                logging.warning(f"⚠️  Custom prompt generation failed for {instance_id}, falling back to routing")
+        
+        # If prompt generation failed or not enabled, use routing to select specialist
+        if not custom_prompt_file and not self.use_prompt_generation:
+            # Use router to determine specialist if not already provided
+            if specialist == "generalist":
+                try:
+                    routing_result = await self.router.route_task(task_description)
+                    specialist = routing_result["specialist"]
+                    logging.info(f"🧭 Router selected specialist: {specialist}")
+                except Exception as e:
+                    logging.error(f"❌ Routing failed: {e}, using generalist")
+                    specialist = "generalist"
         
         cmd = [
             self.codex_binary,
@@ -45,7 +82,16 @@ class InstanceManager:
         if subagent_model:
             cmd.extend(["--model", subagent_model])
         
-        cmd.extend(["--mode", specialist])
+        # If we have a custom prompt file, use experimental_instructions_file config
+        if custom_prompt_file:
+            # Use absolute path to avoid path resolution issues
+            absolute_prompt_path = custom_prompt_file.resolve()
+            cmd.extend(["-c", f"experimental_instructions_file={absolute_prompt_path}"])
+            # Use generalist mode when using custom prompt
+            cmd.extend(["--mode", "generalist"])
+        else:
+            # Use the selected specialist mode
+            cmd.extend(["--mode", specialist])
             
         cmd.append(task_description)
         

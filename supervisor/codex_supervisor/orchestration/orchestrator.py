@@ -27,7 +27,7 @@ class SupervisorOrchestrator:
     
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
-                 benchmark_mode: bool = False, skip_todos: bool = False):
+                 benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False):
         
         self.config = config
         self.session_dir = session_dir
@@ -37,8 +37,9 @@ class SupervisorOrchestrator:
         self.codex_binary = codex_binary
         self.benchmark_mode = benchmark_mode
         self.skip_todos = skip_todos
+        self.use_prompt_generation = use_prompt_generation
         
-        self.instance_manager = InstanceManager(session_dir, codex_binary)
+        self.instance_manager = InstanceManager(session_dir, codex_binary, use_prompt_generation=use_prompt_generation)
         self.log_reader = LogReader(session_dir, self.instance_manager)
         
         self.context_manager = ContextManager(
@@ -263,9 +264,13 @@ class SupervisorOrchestrator:
         
         # Different model lists based on API provider
         if os.getenv("OPENROUTER_API_KEY"):
-            available_models = ["anthropic/claude-sonnet-4", "openai/o3", "anthropic/claude-opus-4", "google/gemini-2.5-pro", "openai/o3-pro"]
+            # Use environment variable or default OpenRouter models
+            default_models = "anthropic/claude-sonnet-4,openai/o3,anthropic/claude-opus-4,google/gemini-2.5-pro,openai/o3-pro"
+            available_models = os.getenv("OPENROUTER_AVAILABLE_MODELS", default_models).split(",")
         else:
-            available_models = ["o3", "gpt-5"]  # OpenAI direct models 
+            # Use environment variable or default OpenAI direct models
+            default_models = "o3,gpt-5"
+            available_models = os.getenv("OPENAI_AVAILABLE_MODELS", default_models).split(",") 
         if self.supervisor_model in available_models:
             available_models.remove(self.supervisor_model)
         

@@ -507,17 +507,13 @@ class SupervisorTools:
         workspace_dir = args.get("workspace_dir", instance_id)
         duration_minutes = args.get("duration_minutes", 60)
         
-        from codex_supervisor.orchestration.router import TaskRouter
-        router = TaskRouter()
-        routing_result = await router.route_task(task_description)
-        specialist = routing_result["specialist"]
-        
+        # Instance manager now handles routing/prompt generation internally
         success = await self.instance_manager.spawn_instance(
-            instance_id, task_description, workspace_dir, duration_minutes, specialist
+            instance_id, task_description, workspace_dir, duration_minutes
         )
         
         if success:
-            return f"✅ Spawned {specialist} specialist instance '{instance_id}' with task: {task_description}"
+            return f"✅ Spawned instance '{instance_id}' with task: {task_description}"
         else:
             return f"❌ Failed to spawn instance '{instance_id}'"
 

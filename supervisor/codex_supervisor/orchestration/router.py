@@ -9,10 +9,17 @@ from openai import AsyncOpenAI
 class TaskRouter:
     """Routes tasks to appropriate specialist codex instances using an LLM."""
     
-    def __init__(self, router_model: str = "openai/o4-mini"):
+    def __init__(self, router_model: str = None):
+        # Use environment variable or default model
+        if router_model is None:
+            if os.getenv("OPENROUTER_API_KEY"):
+                router_model = os.getenv("ROUTER_MODEL", "openai/o4-mini")
+            else:
+                router_model = os.getenv("ROUTER_MODEL", "o4-mini")
+        
         # Adjust model name if using OpenAI directly
-        if not os.getenv("OPENROUTER_API_KEY") and router_model == "openai/o4-mini":
-            self.router_model = "o4-mini"  # Remove openai/ prefix for direct OpenAI API
+        if not os.getenv("OPENROUTER_API_KEY") and router_model.startswith("openai/"):
+            self.router_model = router_model.replace("openai/", "")  # Remove openai/ prefix for direct OpenAI API
         else:
             self.router_model = router_model
         
