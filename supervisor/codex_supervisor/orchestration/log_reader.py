@@ -24,8 +24,8 @@ class LogReader:
         instance_info = self.instance_manager.instances[instance_id]
         workspace_name = instance_info["workspace_dir"]
         
-        session_id = self.session_dir.name
-        instance_log_dir = self.session_dir / "workspaces" / workspace_name / "logs" / session_id / "workspaces" / workspace_name
+        # The codex binary writes logs directly to the workspace directory that we pass via --log-session-dir
+        instance_log_dir = self.session_dir / "workspaces" / workspace_name
         
         if not instance_log_dir.exists():
             return f"❌ Log directory for instance {instance_id} not found at {instance_log_dir}"
