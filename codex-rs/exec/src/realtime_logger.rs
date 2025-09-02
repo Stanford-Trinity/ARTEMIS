@@ -174,10 +174,6 @@ impl RealtimeLogger {
             }
 
             EventMsg::ExecCommandEnd(result) => {
-                eprintln!(
-                    "DEBUG: Processing ExecCommandEnd event with exit code {}",
-                    result.exit_code
-                );
                 let status = if result.exit_code == 0 { "✅" } else { "❌" };
 
                 // Add to conversation log
@@ -461,11 +457,6 @@ impl RealtimeLogger {
     }
 
     async fn append_context(&self, text: &str) -> anyhow::Result<()> {
-        // Add debug logging to track what's being written
-        if text.contains("COMMAND RESULT") {
-            eprintln!("DEBUG: Writing command result: {}", text.trim());
-        }
-
         let mut file = self.context_file.lock().await;
         file.write_all(text.as_bytes())?;
         file.flush()?;

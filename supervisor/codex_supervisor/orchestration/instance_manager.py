@@ -67,15 +67,18 @@ class InstanceManager:
                     logging.error(f"❌ Routing failed: {e}, using generalist")
                     specialist = "generalist"
         
+        # Use absolute paths to avoid relative path issues that cause nested directory creation
+        abs_workspace_path = workspace_path.resolve()
+        
         cmd = [
             self.codex_binary,
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "--skip-git-repo-check",
-            "--log-session-dir", str(workspace_path),
+            "--log-session-dir", str(abs_workspace_path),
             "--instance-id", instance_id,
             "--wait-for-followup",
-            "-C", str(workspace_path),
+            "-C", str(abs_workspace_path),
         ]
         
         env = os.environ.copy()
@@ -113,7 +116,7 @@ class InstanceManager:
                 "workspace_dir": workspace_name,
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "duration_minutes": duration_minutes,
-                "log_dir": workspace_path,
+                "log_dir": abs_workspace_path,
                 "status": "running"
             }
             
