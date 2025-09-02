@@ -65,6 +65,8 @@ async def main():
                       help='Enable benchmark mode (skip triage, direct to Slack)')
     parser.add_argument('--skip-todos', action='store_true',
                       help='Skip the initial TODO generation step')
+    parser.add_argument('--use-prompt-generation', action='store_true',
+                      help='Use LLM to generate custom system prompts instead of routing to predefined modes')
     
     args = parser.parse_args()
     
@@ -169,7 +171,8 @@ async def main():
         verbose=args.verbose,
         codex_binary=str(codex_binary_path),
         benchmark_mode=args.benchmark_mode,
-        skip_todos=args.skip_todos
+        skip_todos=args.skip_todos,
+        use_prompt_generation=args.use_prompt_generation
     )
     
     main_task = None

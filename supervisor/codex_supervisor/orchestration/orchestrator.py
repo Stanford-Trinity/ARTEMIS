@@ -27,7 +27,7 @@ class SupervisorOrchestrator:
     
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
-                 benchmark_mode: bool = False, skip_todos: bool = False):
+                 benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False):
         
         self.config = config
         self.session_dir = session_dir
@@ -37,8 +37,9 @@ class SupervisorOrchestrator:
         self.codex_binary = codex_binary
         self.benchmark_mode = benchmark_mode
         self.skip_todos = skip_todos
+        self.use_prompt_generation = use_prompt_generation
         
-        self.instance_manager = InstanceManager(session_dir, codex_binary)
+        self.instance_manager = InstanceManager(session_dir, codex_binary, use_prompt_generation=use_prompt_generation)
         self.log_reader = LogReader(session_dir, self.instance_manager)
         
         self.context_manager = ContextManager(
@@ -83,6 +84,7 @@ class SupervisorOrchestrator:
         self.conversation_history = []
         self.running = False
         self.heartbeat_file = session_dir / "supervisor_heartbeat.json"
+        self.benchmark_submission_made = False
         
         self.prompt = SupervisorPrompt()
         
@@ -136,6 +138,11 @@ class SupervisorOrchestrator:
                 await self._save_conversation_state(iteration)
                 
                 if session_finished:
+                    # Skip continuation attempt if benchmark submission was made
+                    if self.benchmark_submission_made:
+                        logging.info("✅ Supervisor completed session after benchmark submission")
+                        break
+                    
                     time_remaining = end_time - datetime.now(timezone.utc)
                     if time_remaining.total_seconds() > 300:  # At least 5 minutes remaining
                         logging.info(f"🔄 Supervisor called finished but {time_remaining.total_seconds()/60:.1f} minutes remain - attempting continuation")
@@ -151,6 +158,14 @@ class SupervisorOrchestrator:
             except KeyboardInterrupt:
                 logging.info("⏹️ Supervisor interrupted")
                 break
+            except RuntimeError as e:
+                if "returned None" in str(e) or "critical internal error" in str(e):
+                    logging.error(f"🚨 CRITICAL ERROR - Supervisor exiting: {e}")
+                    self.running = False  # Stop the loop
+                    break
+                else:
+                    logging.error(f"Runtime error in supervisor loop: {e}")
+                    await asyncio.sleep(60)
             except Exception as e:
                 logging.error(f"Error in supervisor loop: {e}")
                 await asyncio.sleep(60)  
@@ -263,9 +278,13 @@ class SupervisorOrchestrator:
         
         # Different model lists based on API provider
         if os.getenv("OPENROUTER_API_KEY"):
-            available_models = ["anthropic/claude-sonnet-4", "openai/o3", "anthropic/claude-opus-4", "google/gemini-2.5-pro", "openai/o3-pro"]
+            # Use environment variable or default OpenRouter models
+            default_models = "anthropic/claude-sonnet-4,openai/o3,anthropic/claude-opus-4,google/gemini-2.5-pro,openai/o3-pro"
+            available_models = os.getenv("OPENROUTER_AVAILABLE_MODELS", default_models).split(",")
         else:
-            available_models = ["o3", "gpt-5"]  # OpenAI direct models 
+            # Use environment variable or default OpenAI direct models
+            default_models = "o3,gpt-5"
+            available_models = os.getenv("OPENAI_AVAILABLE_MODELS", default_models).split(",") 
         if self.supervisor_model in available_models:
             available_models.remove(self.supervisor_model)
         
@@ -331,7 +350,23 @@ class SupervisorOrchestrator:
                         arguments = {}
                     
                     logging.info(f"🔧 Supervisor calling tool: {tool_name}")
-                    tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    try:
+                        tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    except Exception as tool_error:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} threw exception: {tool_error}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        import traceback
+                        traceback.print_exc()
+                        raise RuntimeError(f"Tool {tool_name} threw exception: {tool_error}")
+                    
+                    # Critical error: tool calls must never return None
+                    if tool_result is None:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} returned None! Arguments: {arguments}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        raise RuntimeError(f"Tool {tool_name} returned None - this indicates a critical internal error")
+                    
                     
                     content += self.prompt.format_tool_result(tool_name, tool_result)
             
@@ -626,10 +661,34 @@ class SupervisorOrchestrator:
                     })
                     
                     logging.info(f"🔧 Supervisor calling tool: {tool_name}")
-                    tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    try:
+                        tool_result = await self.tools.handle_tool_call(tool_name, arguments)
+                    except Exception as tool_error:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} threw exception: {tool_error}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        import traceback
+                        traceback.print_exc()
+                        raise RuntimeError(f"Tool {tool_name} threw exception: {tool_error}")
+                    
+                    # Critical error: tool calls must never return None
+                    if tool_result is None:
+                        error_msg = f"🚨 CRITICAL ERROR: Tool {tool_name} returned None! Arguments: {arguments}"
+                        logging.error(error_msg)
+                        print(error_msg)
+                        raise RuntimeError(f"Tool {tool_name} returned None - this indicates a critical internal error")
+                    
                     
                     if tool_name == "finished":
                         session_finished = True
+                    
+                    # Check if this is a submission tool in benchmark mode
+                    if self.benchmark_mode and hasattr(self.tools, 'submission_handler') and self.tools.submission_handler:
+                        schema = self.tools.submission_handler.get_submission_schema()
+                        if schema.get("function", {}).get("name") == tool_name:
+                            session_finished = True
+                            self.benchmark_submission_made = True
+                            logging.info("🏁 Benchmark submission completed - ending session")
                     
                     self.conversation_history.append({
                         "role": "tool",

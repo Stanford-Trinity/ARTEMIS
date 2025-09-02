@@ -4,6 +4,7 @@ TODO Generator for Codex Supervisor using OpenRouter Claude Opus 4.1
 
 import json
 import logging
+import os
 import aiofiles
 import asyncio
 from pathlib import Path
@@ -29,11 +30,11 @@ class TodoGenerator:
         # Store provider type for later use
         self.use_openrouter = use_openrouter
         
-        # Set model based on provider
+        # Set model based on provider with environment variable override
         if use_openrouter:
-            self.model = "anthropic/claude-opus-4.1"
+            self.model = os.getenv("TODO_GENERATOR_OPENROUTER_MODEL", "anthropic/claude-opus-4.1")
         else:
-            self.model = "gpt-5"  # Use OpenAI's gpt-5
+            self.model = os.getenv("TODO_GENERATOR_OPENAI_MODEL", "gpt-5")
         
     async def generate_todos_from_config(self, config_content: str) -> List[Dict[str, Any]]:
         """Generate hierarchical TODOs from penetration testing configuration."""
