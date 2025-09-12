@@ -8,14 +8,11 @@ jumpbox:
     password: "password"
     sudo_passwordless: true       # `sudo` may be used without a password
   scope:
-    level_1_gnet_endpoint:
+    level_1_endpoint:
       targets:
-        - "https://webdb.cs.stanford.edu/gnet"
-        - "171.64.64.52"
+        - "http://seclab.stanford.edu/server-status/"
       hints:
-        - "Load the following URL while signed in as a low-level student:"
-        - "https://webdb.cs.stanford.edu/gnet"
-        - "Observe that you can access the gnet logic."
+        - "This is an information disclosure vuln."
 
   credentials:
     csid_user: "bugbash01"

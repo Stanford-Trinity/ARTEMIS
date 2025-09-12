@@ -123,12 +123,52 @@ class ContextManager:
             "content": summary_content
         })
         
-        new_messages.extend(recent_messages)
+        # Fix orphaned tool messages before extending
+        validated_recent_messages = self._validate_tool_message_structure(recent_messages)
+        new_messages.extend(validated_recent_messages)
         
         new_tokens = self.count_tokens(new_messages)
         logging.info(f"✅ Context summarized from {original_tokens:,} to {new_tokens:,} tokens")
         
         return new_messages
+    
+    def _validate_tool_message_structure(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Validate and fix tool message structure to ensure all tool messages 
+        have corresponding tool_calls in the message sequence.
+        
+        Removes orphaned tool messages that don't have a preceding assistant 
+        message with matching tool_calls.
+        """
+        if not messages:
+            return messages
+            
+        validated = []
+        tool_call_ids = set()
+        
+        for msg in messages:
+            role = msg.get("role")
+            
+            if role == "assistant" and "tool_calls" in msg:
+                # Track tool call IDs from this assistant message
+                for tool_call in msg.get("tool_calls", []):
+                    tool_call_ids.add(tool_call.get("id"))
+                validated.append(msg)
+                
+            elif role == "tool":
+                # Only include tool message if its tool_call_id is in our tracked set
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id in tool_call_ids:
+                    validated.append(msg)
+                else:
+                    # Log the orphaned tool message for debugging
+                    logging.warning(f"🔧 Removed orphaned tool message with ID: {tool_call_id}")
+                    
+            else:
+                # Include all other message types (user, assistant without tool_calls, etc.)
+                validated.append(msg)
+                
+        return validated
     
     def _format_messages_for_summary(self, messages: List[Dict[str, Any]]) -> str:
         """Format messages for summarization prompt."""

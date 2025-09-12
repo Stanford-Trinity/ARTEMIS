@@ -17,6 +17,7 @@ from ..prompts.continuation_context_prompt import get_continuation_context_promp
 from ..prompts.summarization_prompt import get_summarization_prompt
 from ..prompts.supervisor_prompt import SupervisorPrompt
 from ..context_manager import ContextManager
+from ..working_hours import WorkingHoursManager
 
 from .instance_manager import InstanceManager
 from .log_reader import LogReader
@@ -27,7 +28,8 @@ class SupervisorOrchestrator:
     
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
-                 benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False):
+                 benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False,
+                 working_hours_start: int = 9, working_hours_end: int = 17, working_hours_timezone: str = "US/Pacific"):
         
         self.config = config
         self.session_dir = session_dir
@@ -38,6 +40,13 @@ class SupervisorOrchestrator:
         self.benchmark_mode = benchmark_mode
         self.skip_todos = skip_todos
         self.use_prompt_generation = use_prompt_generation
+        
+        # Initialize working hours manager
+        self.working_hours = WorkingHoursManager(
+            start_hour=working_hours_start,
+            end_hour=working_hours_end,
+            timezone_str=working_hours_timezone
+        )
         
         self.instance_manager = InstanceManager(session_dir, codex_binary, use_prompt_generation=use_prompt_generation)
         self.log_reader = LogReader(session_dir, self.instance_manager)
@@ -86,6 +95,9 @@ class SupervisorOrchestrator:
         self.heartbeat_file = session_dir / "supervisor_heartbeat.json"
         self.benchmark_submission_made = False
         
+        # Track time spent sleeping outside working hours for duration adjustment
+        self.sleep_time_outside_hours = timedelta(0)
+        
         self.prompt = SupervisorPrompt()
         
         logging.info(f"🎯 Supervisor initialized with model: {supervisor_model}")
@@ -114,17 +126,33 @@ class SupervisorOrchestrator:
         logging.info(f"🎯 Supervisor starting {self.duration_minutes}min session")
         logging.info(f"📅 Session will end at: {end_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
         
+        # Log working hours information
+        working_status = self.working_hours.get_status_info()
+        logging.info(f"🕐 Working hours: {working_status['working_hours']}")
+        if working_status['in_working_hours']:
+            logging.info(f"✅ Currently in working hours, time until end: {working_status['time_until_end']}")
+        else:
+            logging.info(f"⏰ Currently outside working hours, next working time: {working_status['next_working_time']}")
+        
         await self._save_session_metadata(start_time, end_time)
         
         iteration = 0
         
-        while self.running and datetime.now(timezone.utc) < end_time:
+        while self.running and self._get_adjusted_end_time(start_time, end_time) > datetime.now(timezone.utc):
             try:
                 iteration += 1
                 logging.info(f"🔄 Supervisor iteration {iteration}")
                 
+                # Check working hours and sleep if necessary
+                sleep_duration, wake_time = await self.working_hours.wait_for_working_hours()
+                if sleep_duration.total_seconds() > 0:
+                    self.sleep_time_outside_hours += sleep_duration
+                    logging.info(f"⏱️  Total sleep time outside working hours: {self._format_duration(self.sleep_time_outside_hours)}")
+                    
+                    # Update heartbeat after waking up
+                    await self._update_heartbeat(iteration, start_time, sleeping=False)
                 
-                await self._update_heartbeat(iteration, start_time)
+                await self._update_heartbeat(iteration, start_time, sleeping=False)
                 
                 user_message = await self._generate_instance_update_message()
                 if user_message:
@@ -143,10 +171,11 @@ class SupervisorOrchestrator:
                         logging.info("✅ Supervisor completed session after benchmark submission")
                         break
                     
-                    time_remaining = end_time - datetime.now(timezone.utc)
+                    adjusted_end_time = self._get_adjusted_end_time(start_time, end_time)
+                    time_remaining = adjusted_end_time - datetime.now(timezone.utc)
                     if time_remaining.total_seconds() > 300:  # At least 5 minutes remaining
                         logging.info(f"🔄 Supervisor called finished but {time_remaining.total_seconds()/60:.1f} minutes remain - attempting continuation")
-                        continuation_success = await self._attempt_continuation(start_time, end_time)
+                        continuation_success = await self._attempt_continuation(start_time, adjusted_end_time)
                         if continuation_success:
                             continue  
                     
@@ -376,8 +405,10 @@ class SupervisorOrchestrator:
             logging.error(f"Error getting supervisor response: {e}")
             return None
     
-    async def _update_heartbeat(self, iteration: int, start_time: datetime):
+    async def _update_heartbeat(self, iteration: int, start_time: datetime, sleeping: bool = False):
         """Update supervisor heartbeat file."""
+        working_status = self.working_hours.get_status_info()
+        
         heartbeat = {
             "supervisor_pid": os.getpid(),
             "session_dir": str(self.session_dir),
@@ -385,7 +416,12 @@ class SupervisorOrchestrator:
             "iteration": iteration,
             "start_time": start_time.isoformat(),
             "active_instances": len([i for i in self.instance_manager.instances.values() if i["status"] == "running"]),
-            "status": "running"
+            "status": "sleeping" if sleeping else "running",
+            "working_hours": {
+                "config": working_status['working_hours'],
+                "in_working_hours": working_status['in_working_hours'],
+                "total_sleep_time": self._format_duration(self.sleep_time_outside_hours)
+            }
         }
         
         try:
@@ -534,6 +570,29 @@ class SupervisorOrchestrator:
             logging.error(f"Failed to save final metadata: {e}")
         
         logging.info("✅ Supervisor shutdown complete")
+    
+    def _get_adjusted_end_time(self, start_time: datetime, original_end_time: datetime) -> datetime:
+        """
+        Get adjusted end time accounting for time spent sleeping outside working hours.
+        This effectively pauses the duration during non-working hours.
+        """
+        return original_end_time + self.sleep_time_outside_hours
+    
+    def _format_duration(self, duration: timedelta) -> str:
+        """Format duration in human-readable format."""
+        total_seconds = int(duration.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        
+        parts = []
+        if hours > 0:
+            parts.append(f"{hours}h")
+        if minutes > 0:
+            parts.append(f"{minutes}m")
+        if seconds > 0 and hours == 0:  # Only show seconds if less than an hour
+            parts.append(f"{seconds}s")
+        
+        return " ".join(parts) if parts else "0s"
     
     async def _generate_instance_update_message(self) -> Optional[str]:
         """Generate user message with instance updates."""

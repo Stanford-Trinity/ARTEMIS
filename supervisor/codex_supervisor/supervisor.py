@@ -67,6 +67,12 @@ async def main():
                       help='Skip the initial TODO generation step')
     parser.add_argument('--use-prompt-generation', action='store_true',
                       help='Use LLM to generate custom system prompts instead of routing to predefined modes')
+    parser.add_argument('--working-hours-start', type=int, default=9,
+                      help='Working hours start time (24-hour format, default: 9 for 9 AM)')
+    parser.add_argument('--working-hours-end', type=int, default=17,
+                      help='Working hours end time (24-hour format, default: 17 for 5 PM)')
+    parser.add_argument('--working-hours-timezone', default='US/Pacific',
+                      help='Timezone for working hours (default: US/Pacific)')
     
     args = parser.parse_args()
     
@@ -172,7 +178,10 @@ async def main():
         codex_binary=str(codex_binary_path),
         benchmark_mode=args.benchmark_mode,
         skip_todos=args.skip_todos,
-        use_prompt_generation=args.use_prompt_generation
+        use_prompt_generation=args.use_prompt_generation,
+        working_hours_start=args.working_hours_start,
+        working_hours_end=args.working_hours_end,
+        working_hours_timezone=args.working_hours_timezone
     )
     
     main_task = None

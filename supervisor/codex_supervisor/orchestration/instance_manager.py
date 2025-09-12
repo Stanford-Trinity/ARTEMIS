@@ -35,6 +35,10 @@ class InstanceManager:
         
         workspace_name = Path(workspace_dir).name
         workspace_path = self.session_dir / "workspaces" / workspace_name
+        if not self.session_dir.is_absolute():
+            self.session_dir = self.session_dir.resolve()
+            workspace_path = self.session_dir / "workspaces" / workspace_name
+
         workspace_path.mkdir(parents=True, exist_ok=True)
         
         # Determine if we should use prompt generation or routing
@@ -56,7 +60,7 @@ class InstanceManager:
                 logging.warning(f"⚠️  Custom prompt generation failed for {instance_id}, falling back to routing")
         
         # If prompt generation failed or not enabled, use routing to select specialist
-        if not custom_prompt_file and not self.use_prompt_generation:
+        if not custom_prompt_file:
             # Use router to determine specialist if not already provided
             if specialist == "generalist":
                 try:

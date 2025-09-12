@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 import aiofiles
+from ..vulnerability_storage import get_session_vulnerability_storage
 
 
 class TriageTools:
@@ -57,16 +58,33 @@ class TriageTools:
                                 "type": "string", 
                                 "description": "Task for the instance to work on"
                             },
-                            "workspace_dir": {
-                                "type": "string",
-                                "description": "Working directory name for the instance"
-                            },
                             "duration_minutes": {
                                 "type": "number",
                                 "description": "How long the instance should run (default: 30)"
                             }
                         },
-                        "required": ["instance_id", "task_description", "workspace_dir"]
+                        "required": ["instance_id", "task_description"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "wait_for_instance",
+                    "description": "Wait for a specific instance to reach waiting_for_followup status (when it needs supervisor input) or complete/fail",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "instance_id": {
+                                "type": "string",
+                                "description": "ID of the instance to wait for"
+                            },
+                            "timeout_minutes": {
+                                "type": "number",
+                                "description": "Maximum time to wait in minutes (default: 5)"
+                            }
+                        },
+                        "required": ["instance_id"]
                     }
                 }
             },
@@ -223,21 +241,38 @@ class TriageTools:
             {
                 "type": "function",
                 "function": {
-                    "name": "run_command",
-                    "description": "Execute a shell command for vulnerability validation",
+                    "name": "submit",
+                    "description": "Submit a vulnerability report for processing",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string", "description": "Vulnerability title"},
+                            "asset": {"type": "string", "description": "Affected asset"},
+                            "vuln_type": {"type": "string", "description": "Type of vulnerability"},
+                            "severity": {"type": "string", "description": "Severity rating"},
+                            "description": {"type": "string", "description": "Detailed description"},
+                            "repro_steps": {"type": "string", "description": "Reproduction steps"},
+                            "impact": {"type": "string", "description": "Impact summary"},
+                            "cleanup": {"type": "string", "description": "Cleanup instructions"}
+                        },
+                        "required": ["title", "asset", "vuln_type", "severity", "description", "repro_steps", "impact", "cleanup"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec_bash",
+                    "description": "Execute a bash command for vulnerability validation",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "command": {
                                 "type": "string",
-                                "description": "Shell command to execute"
-                            },
-                            "description": {
-                                "type": "string",
-                                "description": "Description of what this command does"
+                                "description": "Bash command to execute"
                             }
                         },
-                        "required": ["command", "description"]
+                        "required": ["command"]
                     }
                 }
             },
@@ -292,6 +327,7 @@ class TriageTools:
                 }
             }
         ]
+        return tools
     
     async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
         """Execute a triage tool."""
@@ -299,6 +335,8 @@ class TriageTools:
             # Instance management tools
             if tool_name == "spawn_codex":
                 return await self._spawn_codex(arguments)
+            elif tool_name == "wait_for_instance":
+                return await self._wait_for_instance(arguments)
             elif tool_name == "read_instance_logs":
                 return await self._read_instance_logs(arguments)
             elif tool_name == "send_followup":
@@ -312,9 +350,11 @@ class TriageTools:
                 return await self._finished_phase_2(arguments)
             elif tool_name == "finished_phase_3":
                 return await self._finished_phase_3(arguments)
+            elif tool_name == "submit":
+                return await self._submit(arguments)
             # Validation tools
-            elif tool_name == "run_command":
-                return await self._run_command(arguments)
+            elif tool_name == "exec_bash":
+                return await self._exec_bash(arguments)
             elif tool_name == "create_test_file":
                 return await self._create_test_file(arguments)
             elif tool_name == "log_finding":
@@ -339,7 +379,7 @@ class TriageTools:
         
         instance_id = args["instance_id"]
         task_description = args["task_description"]
-        workspace_dir = args["workspace_dir"]
+        workspace_dir = instance_id
         duration_minutes = args.get("duration_minutes", 30)
         
         # Instance manager now handles routing/prompt generation internally
@@ -354,6 +394,119 @@ class TriageTools:
             return f"✅ Spawned codex instance {instance_id} for vulnerability reproduction"
         else:
             return f"❌ Failed to spawn instance {instance_id}"
+
+    async def _wait_for_instance(self, args: Dict[str, Any]) -> str:
+        """Wait for a specific instance to reach waiting_for_followup status or complete/fail."""
+        instance_id = args["instance_id"]
+        timeout_minutes = args.get("timeout_minutes", 5)
+        
+        # Check if instance exists
+        if instance_id not in self.instance_manager.instances:
+            return f"❌ Instance {instance_id} not found"
+        
+        instance = self.instance_manager.instances[instance_id]
+        if instance["status"] != "running":
+            return f"❌ Instance {instance_id} is not running (status: {instance['status']})"
+        
+        instance_log_dir = instance["log_dir"]
+        status_file = instance_log_dir / "status.json"
+        timeout_seconds = timeout_minutes * 60
+        start_time = asyncio.get_event_loop().time()
+        
+        logging.info(f"🕐 Waiting for instance {instance_id} (timeout: {timeout_minutes}min)")
+        logging.info(f"🔧 Status file path: {status_file}")
+        logging.info(f"⏰ Will timeout after {timeout_seconds} seconds")
+        
+        loop_count = 0
+        try:
+            while True:
+                try:
+                    loop_count += 1
+                    # Only log every 5th iteration (every 10 seconds)
+                    if loop_count % 5 == 1:
+                        logging.info(f"🔄 Loop iteration {loop_count} - checking status...")
+                    current_time = asyncio.get_event_loop().time()
+                    elapsed = current_time - start_time
+                    
+                    # Check timeout
+                    if elapsed >= timeout_seconds:
+                        # Before timing out, try to get the last assistant message
+                        conversation_file = instance_log_dir / "realtime_conversation.json"
+                        last_response = "No response available"
+                        if conversation_file.exists():
+                            try:
+                                async with aiofiles.open(conversation_file, 'r') as f:
+                                    conversation = json.loads(await f.read())
+                                
+                                # Get the last assistant message
+                                for msg in reversed(conversation):
+                                    if msg.get("role") == "assistant":
+                                        last_response = msg.get("content", "")[:200] + ("..." if len(msg.get("content", "")) > 200 else "")
+                                        break
+                            except Exception as e:
+                                logging.error(f"Error reading conversation for {instance_id}: {e}")
+                        
+                        return f"⏰ Timeout waiting for instance {instance_id} after {timeout_minutes} minutes. Last response: '{last_response}'. Use read_instance_logs to check progress or terminate_instance if stuck."
+                
+                    # Check if instance completed/failed
+                    process = instance["process"]
+                    if process.returncode is not None:
+                        if process.returncode == 0:
+                            instance["status"] = "completed"
+                            return f"✅ Instance {instance_id} completed while waiting"
+                        else:
+                            instance["status"] = "failed"
+                            return f"❌ Instance {instance_id} failed while waiting (exit code: {process.returncode})"
+                    
+                    # Check status file
+                    if status_file.exists():
+                        async with aiofiles.open(status_file, 'r') as f:
+                            status_data = json.loads(await f.read())
+                        
+                        current_status = status_data.get("status")
+                        logging.info(f"🔍 Instance {instance_id} status: '{current_status}'")
+                        
+                        # Always break on waiting_for_followup regardless of expected status
+                        if current_status == "waiting_for_followup":
+                            logging.info(f"🔄 Instance {instance_id} needs followup, breaking wait loop")
+                            # Read the latest response from final_result.json
+                            final_result_file = instance_log_dir / "final_result.json"
+                            last_response = "No response available"
+                            if final_result_file.exists():
+                                try:
+                                    async with aiofiles.open(final_result_file, 'r') as f:
+                                        final_result = json.loads(await f.read())
+                                    
+                                    # Get the last assistant message from conversation
+                                    conversation = final_result.get("conversation", [])
+                                    for msg in reversed(conversation):
+                                        if msg.get("role") == "assistant":
+                                            last_response = msg.get("content", "")[:200] + ("..." if len(msg.get("content", "")) > 200 else "")
+                                            break
+                                except Exception as e:
+                                    logging.error(f"Error reading final_result for {instance_id}: {e}")
+                            
+                            return f"🔄 Instance {instance_id} is waiting for followup. Last response: '{last_response}'. Use send_followup to continue."
+                        
+                        # Check if instance completed or failed
+                        elif current_status in ["completed", "failed"]:
+                            logging.info(f"✅ Instance {instance_id} finished with status: {current_status}")
+                            if current_status == "completed":
+                                return f"✅ Instance {instance_id} completed"
+                            else:
+                                return f"❌ Instance {instance_id} failed"
+                    # Status file not found, continue waiting
+                        
+                    # Sleep before next check
+                    await asyncio.sleep(2)  # Check every 2 seconds
+                
+                except Exception as e:
+                    logging.error(f"💥 Exception in wait loop for {instance_id}: {e}")
+                    await asyncio.sleep(2)  # Still sleep even on error
+                
+        except asyncio.CancelledError:
+            logging.info(f"🛑 Wait for instance {instance_id} cancelled")
+            return f"🛑 Wait for instance {instance_id} cancelled due to supervisor shutdown"
     
     async def _read_instance_logs(self, args: Dict[str, Any]) -> str:
         """Read logs from a codex instance."""
@@ -474,13 +627,108 @@ class TriageTools:
         # Triage complete - ready for Slack submission
         return f"✅ Phase 3 completed: {severity} ({cvss_score})\n\nTriage process complete. Vulnerability ready for Slack submission."
     
-    async def _run_command(self, args: Dict[str, Any]) -> str:
-        """Execute a shell command for vulnerability validation."""
-        command = args["command"]
-        description = args["description"]
+
+    async def _submit(self, args: Dict[str, Any]) -> str:
+            """Submit vulnerability report for processing (triage or direct to output)."""
+            # Build vulnerability report payload
+            payload = {
+                "title": args["title"],
+                "asset": args["asset"],
+                "vuln_type": args["vuln_type"],
+                "severity": args["severity"],
+                "description": args["description"],
+                "repro_steps": args["repro_steps"],
+                "impact": args["impact"],
+                "cleanup": args["cleanup"]
+            }
+                       
+            await self._send_directly_to_slack(payload)
+            return f"✅ Vulnerability report sent to Slack: {args['title']}"
+
+    async def _send_directly_to_slack(self, payload: Dict[str, Any]) -> str:
+        """Send vulnerability report directly to Slack (benchmark mode)."""
+        webhook_url = self.task_config.get("slack_webhook_url", "https://hooks.slack.com/triggers/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")
+        try:
+            # Use curl to post to webhook
+            process = await asyncio.create_subprocess_exec(
+                "curl", "-X", "POST",
+                "-H", "Content-Type: application/json",
+                "--data", json.dumps(payload),
+                webhook_url,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                logging.info("✅ Slack vulnerability report sent (benchmark mode)")
+                
+                # Log vulnerability to running file
+                await self._log_vulnerability_submission(payload)
+            else:
+                error_msg = stderr.decode() if stderr else "Unknown error"
+                logging.error(f"❌ Failed to send Slack report: {error_msg}")
+                
+        except Exception as e:
+            logging.error(f"❌ Error sending Slack report: {e}")
+
+    async def _log_vulnerability_submission(self, payload: Dict[str, Any]) -> None:
+        """Log vulnerability submission to both session-local and global storage."""
+        import aiofiles
+        from datetime import datetime, timezone
+        
+        # Log to session-local file (existing behavior)
+        vuln_log_file = self.session_dir / "vulnerabilities_found.log"
+        
+        timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+        log_entry = f"""
+=== VULNERABILITY SUBMITTED TO SLACK ===
+Timestamp: {timestamp}
+Title: {payload['title']}
+Asset: {payload['asset']}
+Type: {payload['vuln_type']}
+Severity: {payload['severity']}
+
+Description:
+{payload['description']}
+
+Reproduction Steps:
+{payload['repro_steps']}
+
+Impact:
+{payload['impact']}
+
+Cleanup:
+{payload['cleanup']}
+================================================
+
+"""
         
         try:
-            logging.info(f"🔧 Running command: {description}")
+            # Log to session-local file
+            async with aiofiles.open(vuln_log_file, 'a') as f:
+                await f.write(log_entry)
+            logging.info(f"📝 Logged vulnerability to session file: {vuln_log_file}")
+            
+            # Log to session vulnerability storage
+            storage = get_session_vulnerability_storage(self.session_dir.parent)  # Get session dir from triager dir
+            session_id = self.session_dir.parent.name  # Extract session ID from path
+            triager_id = getattr(self, 'triager_id', 'unknown')  # Will be set by TriagerInstance
+            
+            vuln_hash = await storage.log_vulnerability(payload, session_id, triager_id)
+            logging.info(f"📝 Logged vulnerability {vuln_hash} to session storage")
+            
+        except Exception as e:
+            logging.error(f"❌ Failed to log vulnerability: {e}")
+    
+
+    async def _exec_bash(self, args: Dict[str, Any]) -> str:
+        """Execute a shell command for vulnerability validation."""
+        command = args["command"]
+
+        try:
+            logging.info(f"🔧 Running bash command: {command}")
             
             # Execute command with timeout
             process = await asyncio.create_subprocess_shell(
@@ -495,7 +743,6 @@ class TriageTools:
                 
                 output = []
                 output.append(f"Command: {command}")
-                output.append(f"Description: {description}")
                 
                 if stdout:
                     output.append(f"STDOUT:\n{stdout.decode().strip()}")
@@ -508,7 +755,7 @@ class TriageTools:
                 
                 # Log command execution
                 await self._log_finding(
-                    {"phase": str(self.current_phase), "finding": f"Executed command: {description}", "evidence": result}
+                    {"phase": str(self.current_phase), "finding": f"Executed bash command: {command}", "evidence": result}
                 )
                 
                 return result
