@@ -73,6 +73,8 @@ async def main():
                       help='Working hours end time (24-hour format, default: 17 for 5 PM)')
     parser.add_argument('--working-hours-timezone', default='US/Pacific',
                       help='Timezone for working hours (default: US/Pacific)')
+    parser.add_argument('--finish-on-submit', action='store_true',
+                      help='Finish session when a vulnerability is submitted (instead of continuing until duration expires)')
     
     args = parser.parse_args()
     
@@ -130,6 +132,9 @@ async def main():
         print("🏁 BENCHMARK MODE ENABLED - Triage process will be skipped")
     else:
         print("🔍 Normal mode - Vulnerabilities will go through triage process")
+
+    if args.finish_on_submit:
+        print("⏹️  FINISH ON SUBMIT MODE ENABLED - Session will end after first submission")
     
     codex_binary_path = Path(args.codex_binary).resolve()
     if not codex_binary_path.exists():
@@ -181,7 +186,8 @@ async def main():
         use_prompt_generation=args.use_prompt_generation,
         working_hours_start=args.working_hours_start,
         working_hours_end=args.working_hours_end,
-        working_hours_timezone=args.working_hours_timezone
+        working_hours_timezone=args.working_hours_timezone,
+        finish_on_submit=args.finish_on_submit
     )
     
     main_task = None

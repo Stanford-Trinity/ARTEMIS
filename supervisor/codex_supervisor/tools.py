@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 import aiofiles
 
 class SupervisorTools:
-    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None, submission_config=None):
+    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None, submission_config=None, orchestrator=None):
         self.instance_manager = instance_manager
         self.log_reader = log_reader
         self.session_dir = session_dir
@@ -19,6 +19,7 @@ class SupervisorTools:
         self.benchmark_mode = benchmark_mode
         self.triage_manager = triage_manager
         self.submission_config = submission_config or {}
+        self.orchestrator = orchestrator
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
@@ -466,6 +467,9 @@ class SupervisorTools:
                 # Benchmark mode: check if this is a submission handler tool call
                 schema = self.submission_handler.get_submission_schema()
                 if schema.get("function", {}).get("name") == tool_name:
+                    # Track that a submission was made for finish_on_submit mode
+                    if self.orchestrator:
+                        self.orchestrator.submission_made = True
                     result = await self.submission_handler.submit(arguments)
                     return result.message
             else:
@@ -600,6 +604,10 @@ class SupervisorTools:
             "cleanup": args["cleanup"]
         }
         
+        # Track that a submission was made for finish_on_submit mode
+        if self.orchestrator:
+            self.orchestrator.submission_made = True
+
         # In benchmark mode, skip triage and go directly to Slack
         if self.benchmark_mode:
             if self.submission_handler:

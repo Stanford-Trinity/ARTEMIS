@@ -29,7 +29,8 @@ class SupervisorOrchestrator:
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
                  benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False,
-                 working_hours_start: int = 9, working_hours_end: int = 17, working_hours_timezone: str = "US/Pacific"):
+                 working_hours_start: int = 9, working_hours_end: int = 17, working_hours_timezone: str = "US/Pacific",
+                 finish_on_submit: bool = False):
         
         self.config = config
         self.session_dir = session_dir
@@ -40,6 +41,7 @@ class SupervisorOrchestrator:
         self.benchmark_mode = benchmark_mode
         self.skip_todos = skip_todos
         self.use_prompt_generation = use_prompt_generation
+        self.finish_on_submit = finish_on_submit
         
         # Initialize working hours manager
         self.working_hours = WorkingHoursManager(
@@ -70,13 +72,14 @@ class SupervisorOrchestrator:
         submission_config = config.pop('submission_config', {})
         
         self.tools = SupervisorTools(
-            self.instance_manager, 
-            self.log_reader, 
-            session_dir, 
-            context_manager=self.context_manager, 
+            self.instance_manager,
+            self.log_reader,
+            session_dir,
+            context_manager=self.context_manager,
             benchmark_mode=benchmark_mode,
             triage_manager=self.triage_manager,
-            submission_config=submission_config
+            submission_config=submission_config,
+            orchestrator=self
         )
         
         self.continuation_count = 0
@@ -94,6 +97,7 @@ class SupervisorOrchestrator:
         self.running = False
         self.heartbeat_file = session_dir / "supervisor_heartbeat.json"
         self.benchmark_submission_made = False
+        self.submission_made = False
         
         # Track time spent sleeping outside working hours for duration adjustment
         self.sleep_time_outside_hours = timedelta(0)
@@ -170,15 +174,20 @@ class SupervisorOrchestrator:
                     if self.benchmark_submission_made:
                         logging.info("✅ Supervisor completed session after benchmark submission")
                         break
-                    
+
+                    # Skip continuation attempt if finish_on_submit mode and submission was made
+                    if self.finish_on_submit and self.submission_made:
+                        logging.info("✅ Supervisor completed session after submission (finish_on_submit mode)")
+                        break
+
                     adjusted_end_time = self._get_adjusted_end_time(start_time, end_time)
                     time_remaining = adjusted_end_time - datetime.now(timezone.utc)
                     if time_remaining.total_seconds() > 300:  # At least 5 minutes remaining
                         logging.info(f"🔄 Supervisor called finished but {time_remaining.total_seconds()/60:.1f} minutes remain - attempting continuation")
                         continuation_success = await self._attempt_continuation(start_time, adjusted_end_time)
                         if continuation_success:
-                            continue  
-                    
+                            continue
+
                     logging.info("✅ Supervisor completed session")
                     break
                 
