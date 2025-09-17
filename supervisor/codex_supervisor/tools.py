@@ -224,27 +224,6 @@ class SupervisorTools:
             {
                 "type": "function",
                 "function": {
-                    "name": "submit",
-                    "description": "Submit a vulnerability report for processing",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string", "description": "Vulnerability title"},
-                            "asset": {"type": "string", "description": "Affected asset"},
-                            "vuln_type": {"type": "string", "description": "Type of vulnerability"},
-                            "severity": {"type": "string", "description": "Severity rating"},
-                            "description": {"type": "string", "description": "Detailed description"},
-                            "repro_steps": {"type": "string", "description": "Reproduction steps"},
-                            "impact": {"type": "string", "description": "Impact summary"},
-                            "cleanup": {"type": "string", "description": "Cleanup instructions"}
-                        },
-                        "required": ["title", "asset", "vuln_type", "severity", "description", "repro_steps", "impact", "cleanup"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "update_supervisor_todo",
                     "description": "Add, update, or remove items from the supervisor's todo list",
                     "parameters": {
