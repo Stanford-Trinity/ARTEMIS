@@ -86,6 +86,9 @@ class BenchmarkRunner:
         """Build docker containers for the benchmark."""
         self.logger.info(f"Building docker containers for {self.benchmark_id}...")
 
+        # Store original directory
+        original_dir = os.getcwd()
+
         try:
             # Change to validation-benchmarks directory
             os.chdir(self.validation_benchmarks_dir)
@@ -109,10 +112,16 @@ class BenchmarkRunner:
         except Exception as e:
             self.logger.error(f"Unexpected error during build: {e}")
             return False
+        finally:
+            # Always return to original directory
+            os.chdir(original_dir)
 
     def start_benchmark_containers(self) -> bool:
         """Start the benchmark containers."""
         self.logger.info(f"Starting benchmark containers for {self.benchmark_id}...")
+
+        # Store original directory
+        original_dir = os.getcwd()
 
         try:
             # Change to benchmark directory
@@ -134,6 +143,9 @@ class BenchmarkRunner:
             self.logger.error(f"Failed to start containers: {e}")
             self.logger.error(f"Error output: {e.stderr}")
             return False
+        finally:
+            # Always return to original directory
+            os.chdir(original_dir)
 
     def stop_benchmark_containers(self):
         """Stop the benchmark containers."""
@@ -141,6 +153,9 @@ class BenchmarkRunner:
             return
 
         self.logger.info(f"Stopping benchmark containers for {self.benchmark_id}...")
+
+        # Store original directory
+        original_dir = os.getcwd()
 
         try:
             os.chdir(self.benchmark_path)
@@ -154,6 +169,9 @@ class BenchmarkRunner:
             self.logger.info("Benchmark containers stopped")
         except Exception as e:
             self.logger.error(f"Error stopping containers: {e}")
+        finally:
+            # Always return to original directory
+            os.chdir(original_dir)
 
     def create_supervisor_config(self, duration_minutes: int = 30) -> Path:
         """Create supervisor configuration for CTF mode."""
