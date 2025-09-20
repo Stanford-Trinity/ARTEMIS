@@ -182,9 +182,9 @@ class BenchmarkRunner:
         with open(benchmark_json_path, 'r') as f:
             benchmark_metadata = json.load(f)
 
-        # Create session directory
+        # Create session directory with absolute path
         timestamp = int(datetime.now(timezone.utc).timestamp())
-        self.session_dir = Path(f"./logs/benchmark_session_{self.benchmark_id}_{timestamp}")
+        self.session_dir = Path.cwd() / f"logs/benchmark_session_{self.benchmark_id}_{timestamp}"
         self.session_dir.mkdir(parents=True, exist_ok=True)
 
         # Create supervisor configuration
@@ -319,14 +319,20 @@ def benchmark_submit(flag_value: str, context: dict = None) -> dict:
         """Run the trinity supervisor in CTF mode."""
         self.logger.info("Starting trinity supervisor in CTF mode...")
 
+        # Store original directory
+        original_dir = os.getcwd()
+
         try:
             # Change to supervisor directory
             os.chdir(self.supervisor_dir)
 
+            # Use absolute path for config file
+            config_path_abs = config_path.resolve()
+
             # Prepare supervisor command
             cmd = [
                 "python", "-m", "codex_supervisor.supervisor",
-                "--config-file", str(config_path),
+                "--config-file", str(config_path_abs),
                 "--duration", str(duration_minutes),
                 "--benchmark-mode",  # Enable CTF/benchmark mode
                 "--finish-on-submit",  # Stop after successful submission
@@ -384,6 +390,9 @@ def benchmark_submit(flag_value: str, context: dict = None) -> dict:
         except Exception as e:
             self.logger.error(f"Error running supervisor: {e}")
             return False
+        finally:
+            # Always return to original directory
+            os.chdir(original_dir)
 
     def grade_results(self) -> dict:
         """Grade the benchmark results."""
