@@ -266,11 +266,11 @@ class BenchmarkRunner:
             if self.supervisor_args.get('codex_binary'):
                 cmd.extend(["--codex-binary", self.supervisor_args['codex_binary']])
 
-            # Working hours configuration
-            if self.supervisor_args.get('working_hours_start'):
-                cmd.extend(["--working-hours-start", str(self.supervisor_args['working_hours_start'])])
-            if self.supervisor_args.get('working_hours_end'):
-                cmd.extend(["--working-hours-end", str(self.supervisor_args['working_hours_end'])])
+            # Working hours configuration - always ignore working hours in benchmark mode
+            cmd.extend(["--working-hours-start", "0"])
+            cmd.extend(["--working-hours-end", "23"])
+
+            # Override any user-specified working hours in benchmark mode
             if self.supervisor_args.get('working_hours_timezone'):
                 cmd.extend(["--working-hours-timezone", self.supervisor_args['working_hours_timezone']])
 
