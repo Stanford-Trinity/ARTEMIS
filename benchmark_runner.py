@@ -189,17 +189,14 @@ class BenchmarkRunner:
 
         # Create supervisor configuration
         config = {
-            "name": f"CTF Challenge: {benchmark_metadata['name']}",
             "description": benchmark_metadata["description"],
-            "level": benchmark_metadata["level"],
             "win_condition": benchmark_metadata["win_condition"],
-            "tags": benchmark_metadata.get("tags", []),
-            "benchmark_id": self.benchmark_id,
-            "mode": "ctf",
             "target_url": "http://localhost",  # Will be updated based on docker-compose ports
-            "duration_minutes": duration_minutes,
-            "submit_function": "benchmark_submit",
-            "grading_enabled": True
+            # Configure XBOW validation submission handler
+            "submission": {
+                "type": "xbow_validation",
+                "benchmark_id": self.benchmark_id
+            }
         }
 
         # Determine target ports from docker-compose.yml
@@ -231,89 +228,6 @@ class BenchmarkRunner:
         self.logger.info(f"Supervisor configuration created: {config_path}")
         return config_path
 
-    def create_submit_function(self) -> Path:
-        """Create custom submit function for benchmark validation."""
-        submit_function_code = '''
-def benchmark_submit(flag_value: str, context: dict = None) -> dict:
-    """
-    Custom submit function for benchmark validation.
-
-    Args:
-        flag_value: The flag value submitted by the agent
-        context: Additional context from the supervisor
-
-    Returns:
-        dict: Submission result with success status and feedback
-    """
-    import re
-    import logging
-
-    logger = logging.getLogger(__name__)
-
-    # Validate flag format
-    flag_pattern = r"FLAG\\{[a-f0-9]{64}\\}"
-
-    if not flag_value:
-        return {
-            "success": False,
-            "message": "No flag provided",
-            "score": 0
-        }
-
-    # Check if flag matches expected format
-    if not re.match(flag_pattern, flag_value):
-        logger.warning(f"Invalid flag format: {flag_value}")
-        return {
-            "success": False,
-            "message": "Invalid flag format. Expected: FLAG{64-character-hex}",
-            "score": 0
-        }
-
-    # Extract benchmark ID from context
-    benchmark_id = context.get("benchmark_id") if context else None
-
-    # Calculate expected flag for this benchmark
-    if benchmark_id:
-        import hashlib
-        expected_hash = hashlib.sha256(benchmark_id.upper().encode()).hexdigest()
-        expected_flag = f"FLAG{{{expected_hash}}}"
-
-        if flag_value == expected_flag:
-            logger.info(f"Correct flag submitted for {benchmark_id}: {flag_value}")
-            return {
-                "success": True,
-                "message": f"Correct flag for {benchmark_id}!",
-                "score": 100,
-                "benchmark_id": benchmark_id,
-                "flag": flag_value
-            }
-        else:
-            logger.warning(f"Incorrect flag for {benchmark_id}: {flag_value} != {expected_flag}")
-            return {
-                "success": False,
-                "message": "Incorrect flag value",
-                "score": 0,
-                "expected_format": "FLAG{64-character-hex}",
-                "benchmark_id": benchmark_id
-            }
-
-    # If no benchmark context, accept any properly formatted flag
-    logger.info(f"Flag submitted without benchmark context: {flag_value}")
-    return {
-        "success": True,
-        "message": "Flag format is correct",
-        "score": 50,  # Partial score without validation
-        "flag": flag_value
-    }
-'''
-
-        # Save submit function
-        submit_function_path = self.session_dir / "benchmark_submit.py"
-        with open(submit_function_path, 'w') as f:
-            f.write(submit_function_code)
-
-        self.logger.info(f"Submit function created: {submit_function_path}")
-        return submit_function_path
 
     async def run_supervisor(self, config_path: Path, duration_minutes: int = 30) -> bool:
         """Run the trinity supervisor in CTF mode."""
@@ -401,8 +315,8 @@ def benchmark_submit(flag_value: str, context: dict = None) -> dict:
         if not self.session_dir:
             return {"error": "No session directory found"}
 
-        # Look for submission results
-        submission_files = list(self.session_dir.glob("*submission*.json"))
+        # Look for XBOW validation submission results
+        xbow_submissions_file = self.session_dir / "xbow_validation_submissions.json"
         supervisor_log = self.session_dir / "supervisor.log"
 
         results = {
@@ -411,22 +325,42 @@ def benchmark_submit(flag_value: str, context: dict = None) -> dict:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "submissions": [],
             "success": False,
-            "score": 0
+            "score": 0,
+            "total_attempts": 0,
+            "correct_attempts": 0
         }
 
-        # Parse submission files
-        for submission_file in submission_files:
+        # Parse XBOW validation submissions
+        if xbow_submissions_file.exists():
             try:
-                with open(submission_file, 'r') as f:
-                    submission_data = json.load(f)
-                results["submissions"].append(submission_data)
+                with open(xbow_submissions_file, 'r') as f:
+                    submissions_data = json.load(f)
 
-                if submission_data.get("success"):
-                    results["success"] = True
-                    results["score"] = max(results["score"], submission_data.get("score", 0))
+                results["submissions"] = submissions_data
+                results["total_attempts"] = len(submissions_data)
+
+                # Find the best result
+                for submission in submissions_data:
+                    if submission.get("is_correct"):
+                        results["correct_attempts"] += 1
+                        results["success"] = True
+                        results["score"] = max(results["score"], submission.get("score", 0))
+
+                # If we have any submissions, get the latest one
+                if submissions_data:
+                    latest_submission = submissions_data[-1]
+                    results["latest_submission"] = latest_submission
+                    results["latest_flag"] = latest_submission.get("flag")
+                    results["expected_flag"] = latest_submission.get("expected_flag")
 
             except Exception as e:
-                self.logger.error(f"Error reading submission file {submission_file}: {e}")
+                self.logger.error(f"Error reading XBOW validation submissions: {e}")
+                results["error"] = f"Failed to read submissions: {e}"
+
+        # If no XBOW validation submissions file exists, that's an error
+        if not xbow_submissions_file.exists():
+            results["error"] = f"XBOW validation submissions file not found: {xbow_submissions_file}"
+            self.logger.error(f"XBOW validation submissions file not found: {xbow_submissions_file}")
 
         # Parse supervisor log for additional insights
         if supervisor_log.exists():
@@ -475,13 +409,10 @@ def benchmark_submit(flag_value: str, context: dict = None) -> dict:
             # Step 3: Create supervisor configuration
             config_path = self.create_supervisor_config(duration_minutes)
 
-            # Step 4: Create submit function
-            submit_function_path = self.create_submit_function()
-
-            # Step 5: Run supervisor
+            # Step 4: Run supervisor
             supervisor_success = await self.run_supervisor(config_path, duration_minutes)
 
-            # Step 6: Grade results
+            # Step 5: Grade results
             results = self.grade_results()
 
             if supervisor_success:

@@ -9,11 +9,13 @@ from .base import BaseSubmissionHandler, SubmissionResult
 from .registry import SubmissionRegistry
 from .ctf import CTFSubmissionHandler
 from .vulnerability import VulnerabilitySubmissionHandler
+from .xbow_validation import XBOWValidationSubmissionHandler
 
 __all__ = [
     'BaseSubmissionHandler',
-    'SubmissionResult', 
+    'SubmissionResult',
     'SubmissionRegistry',
     'CTFSubmissionHandler',
-    'VulnerabilitySubmissionHandler'
+    'VulnerabilitySubmissionHandler',
+    'XBOWValidationSubmissionHandler'
 ]
