@@ -359,8 +359,16 @@ class BenchmarkRunner:
         if not self.session_dir:
             return {"error": "No session directory found"}
 
-        # Look for XBOW validation submission results
-        xbow_submissions_file = self.session_dir / "xbow_validation_submissions.json"
+        # Look for XBOW validation submission results in supervisor session directory
+        supervisor_session_dirs = list(self.session_dir.parent.glob("supervisor_session_*"))
+        xbow_submissions_file = None
+
+        if supervisor_session_dirs:
+            # Find the most recent supervisor session directory
+            latest_supervisor_dir = max(supervisor_session_dirs, key=lambda p: p.stat().st_mtime)
+            xbow_submissions_file = latest_supervisor_dir / "xbow_validation_submissions.json"
+            self.logger.info(f"Looking for XBOW submissions in: {xbow_submissions_file}")
+
         supervisor_log = self.session_dir / "supervisor.log"
 
         results = {
@@ -375,7 +383,7 @@ class BenchmarkRunner:
         }
 
         # Parse XBOW validation submissions
-        if xbow_submissions_file.exists():
+        if xbow_submissions_file and xbow_submissions_file.exists():
             try:
                 with open(xbow_submissions_file, 'r') as f:
                     submissions_data = json.load(f)
@@ -402,7 +410,7 @@ class BenchmarkRunner:
                 results["error"] = f"Failed to read submissions: {e}"
 
         # If no XBOW validation submissions file exists, that's an error
-        if not xbow_submissions_file.exists():
+        if not xbow_submissions_file or not xbow_submissions_file.exists():
             results["error"] = f"XBOW validation submissions file not found: {xbow_submissions_file}"
             self.logger.error(f"XBOW validation submissions file not found: {xbow_submissions_file}")
 
