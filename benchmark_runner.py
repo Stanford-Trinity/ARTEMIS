@@ -199,26 +199,70 @@ class BenchmarkRunner:
             }
         }
 
-        # Determine target ports from docker-compose.yml
-        docker_compose_path = self.benchmark_path / "docker-compose.yml"
-        if docker_compose_path.exists():
-            with open(docker_compose_path, 'r') as f:
-                compose_data = yaml.safe_load(f)
+        # Determine actual mapped ports from running containers
+        config["target_url"] = "http://localhost"  # Default fallback
 
-            # Extract port mappings
-            ports = []
-            for service_name, service_config in compose_data.get('services', {}).items():
-                if 'ports' in service_config:
-                    for port_mapping in service_config['ports']:
-                        if isinstance(port_mapping, str) and ':' in port_mapping:
-                            host_port = port_mapping.split(':')[0]
-                            ports.append(int(host_port))
-                        elif isinstance(port_mapping, dict):
-                            ports.append(port_mapping.get('published', 80))
+        try:
+            # Get actual port mappings from running containers
+            result = subprocess.run(
+                ["docker", "compose", "ps", "--format", "json"],
+                cwd=self.benchmark_path,
+                capture_output=True,
+                text=True,
+                check=True
+            )
 
-            if ports:
-                config["target_ports"] = sorted(ports)
-                config["target_url"] = f"http://localhost:{ports[0]}"
+            containers = []
+            for line in result.stdout.strip().split('\n'):
+                if line.strip():
+                    containers.append(json.loads(line))
+
+            # Find containers with HTTP ports exposed
+            for container in containers:
+                publishers = container.get('Publishers', [])
+                for pub in publishers:
+                    if pub.get('TargetPort') == 80:  # HTTP port
+                        published_port = pub.get('PublishedPort')
+                        if published_port:
+                            config["target_url"] = f"http://localhost:{published_port}"
+                            config["target_port"] = published_port
+                            self.logger.info(f"Found HTTP service on port {published_port}")
+                            break
+                if 'target_port' in config:
+                    break
+
+        except Exception as e:
+            self.logger.warning(f"Could not detect container ports: {e}, using fallback")
+            # Fallback: try to get port from docker compose port command
+            try:
+                result = subprocess.run(
+                    ["docker", "compose", "port", "idor_broken_authz_trading_platform", "80"],
+                    cwd=self.benchmark_path,
+                    capture_output=True,
+                    text=True,
+                    check=False  # Don't fail if service name doesn't exist
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    port_info = result.stdout.strip()  # e.g., "0.0.0.0:32774"
+                    if ':' in port_info:
+                        port = port_info.split(':')[-1]
+                        config["target_url"] = f"http://localhost:{port}"
+                        config["target_port"] = int(port)
+                        self.logger.info(f"Found HTTP service on port {port} via fallback")
+            except Exception as fallback_error:
+                self.logger.warning(f"Fallback port detection failed: {fallback_error}")
+
+        # Verify the target URL is reachable
+        if 'target_port' in config:
+            try:
+                import requests
+                response = requests.get(config["target_url"], timeout=5)
+                if response.status_code == 200:
+                    self.logger.info(f"✅ Target URL {config['target_url']} is reachable")
+                else:
+                    self.logger.warning(f"⚠️ Target URL {config['target_url']} returned status {response.status_code}")
+            except Exception as e:
+                self.logger.warning(f"⚠️ Could not verify target URL {config['target_url']}: {e}")
 
         # Save configuration
         config_path = self.session_dir / "supervisor_config.yaml"
