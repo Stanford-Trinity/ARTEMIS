@@ -193,7 +193,7 @@ class BenchmarkRunner:
             "win_condition": benchmark_metadata["win_condition"],
             "target_url": "http://localhost",  # Will be updated based on docker-compose ports
             # Configure XBOW validation submission handler
-            "submission": {
+            "submission_config": {
                 "type": "xbow_validation",
                 "benchmark_id": self.benchmark_id
             }
@@ -509,6 +509,8 @@ Environment Variables:
                        help='Duration to run (minutes)')
     parser.add_argument('--list-benchmarks', action='store_true',
                        help='List available benchmarks')
+    parser.add_argument('--run-all', action='store_true',
+                       help='Run all available benchmarks sequentially')
 
     # Supervisor model and API configuration
     parser.add_argument('--supervisor-model', '-m', default=None,
@@ -614,9 +616,110 @@ Environment Variables:
                             print(f"  {benchmark_dir.name}: (metadata error)")
         return
 
+    # Handle running all benchmarks
+    if args.run_all:
+        benchmarks_dir = args.validation_benchmarks_dir / "benchmarks"
+        if not benchmarks_dir.exists():
+            print(f"❌ Benchmarks directory not found: {benchmarks_dir}")
+            return
+
+        # Get all available benchmarks
+        benchmark_ids = []
+        for benchmark_dir in sorted(benchmarks_dir.iterdir()):
+            if benchmark_dir.is_dir() and benchmark_dir.name.startswith('XBEN-'):
+                benchmark_json = benchmark_dir / "benchmark.json"
+                if benchmark_json.exists():
+                    benchmark_ids.append(benchmark_dir.name)
+
+        print(f"🚀 Running {len(benchmark_ids)} benchmarks sequentially...")
+
+        # Prepare supervisor arguments
+        supervisor_args = {
+            'supervisor_model': args.supervisor_model,
+            'verbose': args.verbose,
+            'skip_todos': args.skip_todos,
+            'use_prompt_generation': args.use_prompt_generation,
+            'codex_binary': args.codex_binary,
+            'working_hours_start': args.working_hours_start,
+            'working_hours_end': args.working_hours_end,
+            'working_hours_timezone': args.working_hours_timezone,
+        }
+        supervisor_args = {k: v for k, v in supervisor_args.items() if v is not None}
+
+        all_results = []
+        successful_count = 0
+
+        for i, benchmark_id in enumerate(benchmark_ids, 1):
+            print(f"\n{'='*60}")
+            print(f"📊 BENCHMARK {i}/{len(benchmark_ids)}: {benchmark_id}")
+            print(f"{'='*60}")
+
+            try:
+                runner = BenchmarkRunner(
+                    benchmark_id=benchmark_id,
+                    supervisor_dir=args.supervisor_dir,
+                    validation_benchmarks_dir=args.validation_benchmarks_dir,
+                    supervisor_args=supervisor_args
+                )
+
+                result = await runner.run_benchmark(args.duration)
+                result["benchmark_number"] = i
+                result["total_benchmarks"] = len(benchmark_ids)
+                all_results.append(result)
+
+                if result.get("success"):
+                    successful_count += 1
+                    print(f"✅ {benchmark_id} COMPLETED (Score: {result.get('score', 0)}/100)")
+                else:
+                    print(f"❌ {benchmark_id} FAILED")
+
+            except Exception as e:
+                print(f"💥 {benchmark_id} ERROR: {e}")
+                all_results.append({
+                    "benchmark_id": benchmark_id,
+                    "benchmark_number": i,
+                    "total_benchmarks": len(benchmark_ids),
+                    "error": str(e),
+                    "success": False,
+                    "score": 0
+                })
+
+        # Generate summary report
+        print(f"\n{'='*60}")
+        print(f"📊 FINAL RESULTS: {successful_count}/{len(benchmark_ids)} SUCCESSFUL")
+        print(f"{'='*60}")
+
+        total_score = sum(r.get("score", 0) for r in all_results)
+        max_possible_score = len(benchmark_ids) * 100
+        overall_percentage = (total_score / max_possible_score * 100) if max_possible_score > 0 else 0
+
+        print(f"Overall Score: {total_score}/{max_possible_score} ({overall_percentage:.1f}%)")
+        print(f"Success Rate: {successful_count}/{len(benchmark_ids)} ({successful_count/len(benchmark_ids)*100:.1f}%)")
+
+        # Save combined results
+        timestamp = int(datetime.now(timezone.utc).timestamp())
+        results_file = Path(f"./logs/all_benchmarks_results_{timestamp}.json")
+        results_file.parent.mkdir(exist_ok=True)
+
+        combined_results = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total_benchmarks": len(benchmark_ids),
+            "successful_benchmarks": successful_count,
+            "total_score": total_score,
+            "max_possible_score": max_possible_score,
+            "overall_percentage": overall_percentage,
+            "individual_results": all_results
+        }
+
+        with open(results_file, 'w') as f:
+            json.dump(combined_results, f, indent=2)
+
+        print(f"📄 Detailed results saved to: {results_file}")
+        return
+
     # Validate benchmark_id is provided
     if not args.benchmark_id:
-        parser.error("benchmark_id is required unless using --list-benchmarks or --check-env")
+        parser.error("benchmark_id is required unless using --list-benchmarks, --check-env, or --run-all")
 
     # Prepare supervisor arguments
     supervisor_args = {
