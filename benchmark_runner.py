@@ -776,8 +776,8 @@ Environment Variables:
             all_results = await run_all_benchmarks_parallel(
                 benchmark_ids=benchmark_ids,
                 workers=workers,
-                supervisor_dir=args.supervisor_dir,
-                validation_benchmarks_dir=args.validation_benchmarks_dir,
+                supervisor_dir=args.supervisor_dir.resolve(),  # Resolve paths once at main level
+                validation_benchmarks_dir=args.validation_benchmarks_dir.resolve(),
                 supervisor_args=supervisor_args,
                 duration=args.duration
             )
