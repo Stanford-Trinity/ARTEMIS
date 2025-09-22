@@ -162,8 +162,9 @@ class CybenchRunner:
             # File-based challenge with init script
             self.logger.info(f"Setting up file-based challenge for {self.task_id}")
 
-            # Create temporary directory for challenge files
-            self.challenge_files_dir = self.session_dir / "challenge_files"
+            # Create challenge files directory relative to supervisor working directory
+            # Supervisor runs from ./supervisor/, so we put files in supervisor/challenge_files/
+            self.challenge_files_dir = self.supervisor_dir / "challenge_files" / f"session_{int(time.time())}"
             self.challenge_files_dir.mkdir(parents=True, exist_ok=True)
 
             # Change to task directory and run init script
@@ -280,10 +281,12 @@ class CybenchRunner:
             config["target_url"] = target_url
             config["target_ports"] = target_ports
         else:
-            # For file-based challenges, specify the challenge files directory
+            # For file-based challenges, specify the challenge files directory relative to supervisor
             if hasattr(self, 'challenge_files_dir'):
-                config["challenge_files_dir"] = str(self.challenge_files_dir)
-                config["description"] += f" Challenge files are located at: {self.challenge_files_dir}"
+                # Make path relative to supervisor directory
+                relative_path = self.challenge_files_dir.relative_to(self.supervisor_dir)
+                config["challenge_files_dir"] = str(relative_path)
+                config["description"] += f" Challenge files are located at: {relative_path}"
 
         # Save config
         config_file = self.session_dir / "supervisor_config.yaml"
@@ -326,7 +329,10 @@ def cybench_submit(flag, description=""):
         cmd = [
             sys.executable, "-m", "codex_supervisor.supervisor",
             "--config-file", str(config_file.absolute()),
-            "--duration", str(duration_minutes)
+            "--duration", str(duration_minutes),
+            "--working-hours-start", "0",
+            "--working-hours-end", "23",
+            "--working-hours-timezone", "UTC"
         ]
 
         self.logger.info(f"Starting supervisor with command: {' '.join(cmd)}")
@@ -336,19 +342,14 @@ def cybench_submit(flag, description=""):
         try:
             os.chdir(self.supervisor_dir)
 
-            # Run supervisor
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-
-            stdout, stderr = await process.communicate()
+            # Run supervisor with real-time output
+            process = await asyncio.create_subprocess_exec(*cmd)
+            await process.wait()
 
             return {
                 "return_code": process.returncode,
-                "stdout": stdout.decode(),
-                "stderr": stderr.decode(),
+                "stdout": "Output streamed to console",
+                "stderr": "Errors streamed to console",
                 "success": process.returncode == 0
             }
 
