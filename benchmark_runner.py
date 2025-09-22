@@ -491,6 +491,94 @@ class BenchmarkRunner:
             self.stop_benchmark_containers()
 
 
+async def run_benchmark_parallel(benchmark_id: str, benchmark_number: int, total_benchmarks: int,
+                                 supervisor_dir: Path, validation_benchmarks_dir: Path,
+                                 supervisor_args: dict, duration: int, semaphore: asyncio.Semaphore) -> dict:
+    """Run a single benchmark with concurrency control."""
+    async with semaphore:
+        print(f"🔄 Starting benchmark {benchmark_number}/{total_benchmarks}: {benchmark_id}")
+
+        try:
+            # Add process ID to avoid session directory conflicts
+            import os
+            session_suffix = f"_{os.getpid()}_{int(time.time())}"
+
+            runner = BenchmarkRunner(
+                benchmark_id=benchmark_id,
+                supervisor_dir=supervisor_dir,
+                validation_benchmarks_dir=validation_benchmarks_dir,
+                supervisor_args=supervisor_args
+            )
+
+            # Modify session directory to include process info for uniqueness
+            result = await runner.run_benchmark(duration)
+            result["benchmark_number"] = benchmark_number
+            result["total_benchmarks"] = total_benchmarks
+            result["worker_pid"] = os.getpid()
+
+            if result.get("success"):
+                print(f"✅ {benchmark_id} COMPLETED (Score: {result.get('score', 0)}/100)")
+            else:
+                print(f"❌ {benchmark_id} FAILED")
+
+            return result
+
+        except Exception as e:
+            print(f"💥 {benchmark_id} ERROR: {e}")
+            return {
+                "benchmark_id": benchmark_id,
+                "benchmark_number": benchmark_number,
+                "total_benchmarks": total_benchmarks,
+                "error": str(e),
+                "success": False,
+                "score": 0,
+                "worker_pid": os.getpid()
+            }
+
+
+async def run_all_benchmarks_parallel(benchmark_ids: list, workers: int, supervisor_dir: Path,
+                                    validation_benchmarks_dir: Path, supervisor_args: dict, duration: int) -> list:
+    """Run all benchmarks in parallel with limited concurrency."""
+    # Create semaphore to limit concurrent executions
+    semaphore = asyncio.Semaphore(workers)
+
+    # Create tasks for all benchmarks
+    tasks = []
+    for i, benchmark_id in enumerate(benchmark_ids, 1):
+        task = run_benchmark_parallel(
+            benchmark_id=benchmark_id,
+            benchmark_number=i,
+            total_benchmarks=len(benchmark_ids),
+            supervisor_dir=supervisor_dir,
+            validation_benchmarks_dir=validation_benchmarks_dir,
+            supervisor_args=supervisor_args,
+            duration=duration,
+            semaphore=semaphore
+        )
+        tasks.append(task)
+
+    # Run all tasks concurrently with progress updates
+    print(f"📊 Executing {len(tasks)} benchmarks with {workers} workers...")
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Handle any exceptions
+    processed_results = []
+    for i, result in enumerate(results):
+        if isinstance(result, Exception):
+            processed_results.append({
+                "benchmark_id": benchmark_ids[i],
+                "benchmark_number": i + 1,
+                "total_benchmarks": len(benchmark_ids),
+                "error": str(result),
+                "success": False,
+                "score": 0
+            })
+        else:
+            processed_results.append(result)
+
+    return processed_results
+
+
 async def main():
     parser = argparse.ArgumentParser(
         description='Run Trinity Agent with XBOW Validation Benchmarks',
@@ -519,6 +607,10 @@ Environment Variables:
                        help='List available benchmarks')
     parser.add_argument('--run-all', action='store_true',
                        help='Run all available benchmarks sequentially')
+    parser.add_argument('--parallel', type=int, metavar='N',
+                       help='Run all benchmarks in parallel with N workers (requires --run-all)')
+    parser.add_argument('--max-workers', type=int, default=3,
+                       help='Maximum number of parallel workers (default: 3, max: 10)')
 
     # Supervisor model and API configuration
     parser.add_argument('--supervisor-model', '-m', default=None,
@@ -549,6 +641,16 @@ Environment Variables:
                        help='Check environment and API keys without running benchmark')
 
     args = parser.parse_args()
+
+    # Validate parallel arguments
+    if args.parallel and not args.run_all:
+        parser.error("--parallel requires --run-all")
+
+    if args.parallel and (args.parallel < 1 or args.parallel > 10):
+        parser.error("--parallel must be between 1 and 10")
+
+    if args.max_workers and (args.max_workers < 1 or args.max_workers > 10):
+        parser.error("--max-workers must be between 1 and 10")
 
     # Set environment variables from args
     if args.no_cache:
@@ -639,7 +741,12 @@ Environment Variables:
                 if benchmark_json.exists():
                     benchmark_ids.append(benchmark_dir.name)
 
-        print(f"🚀 Running {len(benchmark_ids)} benchmarks sequentially...")
+        # Determine execution mode
+        if args.parallel:
+            workers = args.parallel if args.parallel else args.max_workers
+            print(f"🚀 Running {len(benchmark_ids)} benchmarks in parallel with {workers} workers...")
+        else:
+            print(f"🚀 Running {len(benchmark_ids)} benchmarks sequentially...")
 
         # Prepare supervisor arguments
         supervisor_args = {
@@ -654,43 +761,56 @@ Environment Variables:
         }
         supervisor_args = {k: v for k, v in supervisor_args.items() if v is not None}
 
-        all_results = []
-        successful_count = 0
+        # Execute benchmarks based on mode
+        if args.parallel:
+            workers = args.parallel
+            all_results = await run_all_benchmarks_parallel(
+                benchmark_ids=benchmark_ids,
+                workers=workers,
+                supervisor_dir=args.supervisor_dir,
+                validation_benchmarks_dir=args.validation_benchmarks_dir,
+                supervisor_args=supervisor_args,
+                duration=args.duration
+            )
+        else:
+            # Sequential execution (original logic)
+            all_results = []
+            for i, benchmark_id in enumerate(benchmark_ids, 1):
+                print(f"\n{'='*60}")
+                print(f"📊 BENCHMARK {i}/{len(benchmark_ids)}: {benchmark_id}")
+                print(f"{'='*60}")
 
-        for i, benchmark_id in enumerate(benchmark_ids, 1):
-            print(f"\n{'='*60}")
-            print(f"📊 BENCHMARK {i}/{len(benchmark_ids)}: {benchmark_id}")
-            print(f"{'='*60}")
+                try:
+                    runner = BenchmarkRunner(
+                        benchmark_id=benchmark_id,
+                        supervisor_dir=args.supervisor_dir,
+                        validation_benchmarks_dir=args.validation_benchmarks_dir,
+                        supervisor_args=supervisor_args
+                    )
 
-            try:
-                runner = BenchmarkRunner(
-                    benchmark_id=benchmark_id,
-                    supervisor_dir=args.supervisor_dir,
-                    validation_benchmarks_dir=args.validation_benchmarks_dir,
-                    supervisor_args=supervisor_args
-                )
+                    result = await runner.run_benchmark(args.duration)
+                    result["benchmark_number"] = i
+                    result["total_benchmarks"] = len(benchmark_ids)
+                    all_results.append(result)
 
-                result = await runner.run_benchmark(args.duration)
-                result["benchmark_number"] = i
-                result["total_benchmarks"] = len(benchmark_ids)
-                all_results.append(result)
+                    if result.get("success"):
+                        print(f"✅ {benchmark_id} COMPLETED (Score: {result.get('score', 0)}/100)")
+                    else:
+                        print(f"❌ {benchmark_id} FAILED")
 
-                if result.get("success"):
-                    successful_count += 1
-                    print(f"✅ {benchmark_id} COMPLETED (Score: {result.get('score', 0)}/100)")
-                else:
-                    print(f"❌ {benchmark_id} FAILED")
+                except Exception as e:
+                    print(f"💥 {benchmark_id} ERROR: {e}")
+                    all_results.append({
+                        "benchmark_id": benchmark_id,
+                        "benchmark_number": i,
+                        "total_benchmarks": len(benchmark_ids),
+                        "error": str(e),
+                        "success": False,
+                        "score": 0
+                    })
 
-            except Exception as e:
-                print(f"💥 {benchmark_id} ERROR: {e}")
-                all_results.append({
-                    "benchmark_id": benchmark_id,
-                    "benchmark_number": i,
-                    "total_benchmarks": len(benchmark_ids),
-                    "error": str(e),
-                    "success": False,
-                    "score": 0
-                })
+        # Calculate results
+        successful_count = sum(1 for r in all_results if r.get("success", False))
 
         # Generate summary report
         print(f"\n{'='*60}")
