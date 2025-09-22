@@ -542,41 +542,50 @@ async def run_all_benchmarks_parallel(benchmark_ids: list, workers: int, supervi
     # Create semaphore to limit concurrent executions
     semaphore = asyncio.Semaphore(workers)
 
-    # Create tasks for all benchmarks
-    tasks = []
-    for i, benchmark_id in enumerate(benchmark_ids, 1):
-        task = run_benchmark_parallel(
+    # Create a queue of benchmark IDs
+    results = []
+
+    async def worker(benchmark_id: str, benchmark_number: int):
+        return await run_benchmark_parallel(
             benchmark_id=benchmark_id,
-            benchmark_number=i,
+            benchmark_number=benchmark_number,
             total_benchmarks=len(benchmark_ids),
-            supervisor_dir=supervisor_dir,
-            validation_benchmarks_dir=validation_benchmarks_dir,
+            supervisor_dir=supervisor_dir.resolve(),  # Resolve path issues
+            validation_benchmarks_dir=validation_benchmarks_dir.resolve(),
             supervisor_args=supervisor_args,
             duration=duration,
             semaphore=semaphore
         )
-        tasks.append(task)
 
-    # Run all tasks concurrently with progress updates
-    print(f"📊 Executing {len(tasks)} benchmarks with {workers} workers...")
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    # Process benchmarks in batches
+    for i in range(0, len(benchmark_ids), workers):
+        batch = benchmark_ids[i:i+workers]
+        batch_tasks = []
 
-    # Handle any exceptions
-    processed_results = []
-    for i, result in enumerate(results):
-        if isinstance(result, Exception):
-            processed_results.append({
-                "benchmark_id": benchmark_ids[i],
-                "benchmark_number": i + 1,
-                "total_benchmarks": len(benchmark_ids),
-                "error": str(result),
-                "success": False,
-                "score": 0
-            })
-        else:
-            processed_results.append(result)
+        for j, benchmark_id in enumerate(batch):
+            task = asyncio.create_task(worker(benchmark_id, i + j + 1))
+            batch_tasks.append(task)
 
-    return processed_results
+        # Wait for current batch to complete
+        batch_results = await asyncio.gather(*batch_tasks, return_exceptions=True)
+
+        # Handle any exceptions in batch
+        for k, result in enumerate(batch_results):
+            if isinstance(result, Exception):
+                results.append({
+                    "benchmark_id": batch[k],
+                    "benchmark_number": i + k + 1,
+                    "total_benchmarks": len(benchmark_ids),
+                    "error": str(result),
+                    "success": False,
+                    "score": 0
+                })
+            else:
+                results.append(result)
+
+        print(f"📊 Completed batch {i//workers + 1}/{(len(benchmark_ids) + workers - 1)//workers}")
+
+    return results
 
 
 async def main():
