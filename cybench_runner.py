@@ -296,21 +296,16 @@ class CybenchRunner:
             **self.supervisor_args
         }
 
-        # Add target info only for service-based challenges
+        # Add target info for service-based challenges
         if is_service_based:
             config["target_url"] = target_url
             config["target_ports"] = target_ports
-        else:
-            # For file-based challenges, specify the challenge files directory relative to supervisor
-            if hasattr(self, 'challenge_files_dir'):
-                # Make path relative to supervisor directory
-                try:
-                    relative_path = self.challenge_files_dir.relative_to(self.supervisor_dir.resolve())
-                except ValueError:
-                    # If paths aren't in the same hierarchy, use just the directory name
-                    relative_path = f"challenge_files/{self.challenge_files_dir.name}"
-                config["challenge_files_dir"] = str(relative_path)
-                config["description"] += f" Challenge files are located at: {relative_path}"
+
+        # Add challenge files info if available (for file-based or hybrid challenges)
+        if hasattr(self, 'challenge_files_dir'):
+            # Provide absolute path to challenge files
+            config["challenge_files_dir"] = str(self.challenge_files_dir.absolute())
+            config["description"] += f" Challenge files are located at: {self.challenge_files_dir.absolute()}"
 
         # Save config
         config_file = self.session_dir / "supervisor_config.yaml"
