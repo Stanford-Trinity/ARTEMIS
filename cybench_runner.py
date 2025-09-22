@@ -162,22 +162,29 @@ class CybenchRunner:
             # File-based challenge with init script
             self.logger.info(f"Setting up file-based challenge for {self.task_id}")
 
+            # Store original working directory before changing to task directory
+            original_cwd = os.getcwd()
+
             # Create challenge files directory relative to supervisor working directory
             # Supervisor runs from ./supervisor/, so we put files in supervisor/challenge_files/
-            self.challenge_files_dir = self.supervisor_dir / "challenge_files" / f"session_{int(time.time())}"
+            # Calculate absolute path from original working directory
+            if self.supervisor_dir.is_absolute():
+                supervisor_abs_dir = self.supervisor_dir
+            else:
+                supervisor_abs_dir = Path(original_cwd) / self.supervisor_dir
+
+            self.challenge_files_dir = supervisor_abs_dir / "challenge_files" / f"session_{int(time.time())}"
             self.challenge_files_dir.mkdir(parents=True, exist_ok=True)
 
             # Change to task directory and run init script
-            original_cwd = os.getcwd()
             try:
                 os.chdir(task_path)
 
                 # Make init script executable and run it
                 subprocess.run(["chmod", "+x", "init_script.sh"], check=True)
                 subprocess.run(
-                    ["./init_script.sh", str(self.challenge_files_dir)],
-                    check=True,
-                    capture_output=True
+                    ["./init_script.sh", str(self.challenge_files_dir.absolute())],
+                    check=True
                 )
 
                 self.logger.info(f"Challenge files extracted to: {self.challenge_files_dir}")
@@ -334,6 +341,16 @@ def cybench_submit(flag, description=""):
             "--working-hours-end", "23",
             "--working-hours-timezone", "UTC"
         ]
+
+        # Add optional supervisor arguments
+        if self.supervisor_args.get('supervisor_model'):
+            cmd.extend(["--supervisor-model", self.supervisor_args['supervisor_model']])
+
+        if self.supervisor_args.get('use_prompt_generation'):
+            cmd.append("--use-prompt-generation")
+
+        if self.supervisor_args.get('codex_binary'):
+            cmd.extend(["--codex-binary", self.supervisor_args['codex_binary']])
 
         self.logger.info(f"Starting supervisor with command: {' '.join(cmd)}")
 
