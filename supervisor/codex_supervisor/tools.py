@@ -31,12 +31,13 @@ class SupervisorTools:
     def _init_submission_handlers(self):
         """Initialize submission handlers based on config."""
         from .submissions.registry import registry
-        from .submissions import CTFSubmissionHandler, VulnerabilitySubmissionHandler, XBOWValidationSubmissionHandler
+        from .submissions import CTFSubmissionHandler, VulnerabilitySubmissionHandler, XBOWValidationSubmissionHandler, CybenchSubmissionHandler
 
         # Register handlers
         registry.register("ctf", CTFSubmissionHandler)
         registry.register("vulnerability", VulnerabilitySubmissionHandler)
         registry.register("xbow_validation", XBOWValidationSubmissionHandler)
+        registry.register("cybench", CybenchSubmissionHandler)
         
         # Create handler instance if benchmark mode is enabled
         self.submission_handler = None

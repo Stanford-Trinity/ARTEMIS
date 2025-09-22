@@ -10,6 +10,7 @@ from .registry import SubmissionRegistry
 from .ctf import CTFSubmissionHandler
 from .vulnerability import VulnerabilitySubmissionHandler
 from .xbow_validation import XBOWValidationSubmissionHandler
+from .cybench import CybenchSubmissionHandler
 
 __all__ = [
     'BaseSubmissionHandler',
@@ -17,5 +18,6 @@ __all__ = [
     'SubmissionRegistry',
     'CTFSubmissionHandler',
     'VulnerabilitySubmissionHandler',
-    'XBOWValidationSubmissionHandler'
+    'XBOWValidationSubmissionHandler',
+    'CybenchSubmissionHandler'
 ]
