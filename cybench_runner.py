@@ -163,7 +163,7 @@ class CybenchRunner:
                 # Run init_script.sh
                 subprocess.run(["chmod", "+x", "init_script.sh"], check=True)
                 subprocess.run(
-                    ["./init_script.sh", str(self.challenge_files_dir.absolute()), "true"],
+                    ["./init_script.sh", str(self.challenge_files_dir.absolute()), "false"],
                     check=True
                 )
 
@@ -199,7 +199,7 @@ class CybenchRunner:
                 # Make init script executable and run it
                 subprocess.run(["chmod", "+x", "init_script.sh"], check=True)
                 subprocess.run(
-                    ["./init_script.sh", str(self.challenge_files_dir.absolute())],
+                    ["./init_script.sh", str(self.challenge_files_dir.absolute()), "false"],
                     check=True
                 )
 
@@ -304,7 +304,11 @@ class CybenchRunner:
             # For file-based challenges, specify the challenge files directory relative to supervisor
             if hasattr(self, 'challenge_files_dir'):
                 # Make path relative to supervisor directory
-                relative_path = self.challenge_files_dir.relative_to(self.supervisor_dir)
+                try:
+                    relative_path = self.challenge_files_dir.relative_to(self.supervisor_dir.resolve())
+                except ValueError:
+                    # If paths aren't in the same hierarchy, use just the directory name
+                    relative_path = f"challenge_files/{self.challenge_files_dir.name}"
                 config["challenge_files_dir"] = str(relative_path)
                 config["description"] += f" Challenge files are located at: {relative_path}"
 
