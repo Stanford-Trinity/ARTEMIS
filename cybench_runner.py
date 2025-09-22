@@ -129,32 +129,48 @@ class CybenchRunner:
         if not task_path.exists():
             raise FileNotFoundError(f"Task directory not found: {task_path}")
 
-        compose_file = task_path / "docker-compose.yml"
+        start_docker_script = task_path / "start_docker.sh"
         init_script = task_path / "init_script.sh"
 
-        if compose_file.exists():
-            # Service-based challenge with Docker containers
-            self.logger.info(f"Starting containers for {self.task_id}")
+        # Store original working directory before changing to task directory
+        original_cwd = os.getcwd()
 
-            # Change to task directory and run docker compose
-            original_cwd = os.getcwd()
+        # Check if both scripts exist
+        if start_docker_script.exists() and init_script.exists():
+            # Service-based challenge: run start_docker.sh first, then init_script.sh
+            self.logger.info(f"Starting containers and setting up challenge for {self.task_id}")
+
             try:
                 os.chdir(task_path)
 
-                # Start containers
-                subprocess.run(
-                    ["docker", "compose", "up", "-d", "--build"],
-                    check=True,
-                    capture_output=True
-                )
+                # Run start_docker.sh first
+                subprocess.run(["chmod", "+x", "start_docker.sh"], check=True)
+                subprocess.run(["./start_docker.sh"], check=True)
 
                 # Wait for containers to be ready
                 await asyncio.sleep(5)
-
                 self.logger.info("Containers started successfully")
 
+                # Create challenge files directory for init script
+                if self.supervisor_dir.is_absolute():
+                    supervisor_abs_dir = self.supervisor_dir
+                else:
+                    supervisor_abs_dir = Path(original_cwd) / self.supervisor_dir
+
+                self.challenge_files_dir = supervisor_abs_dir / "challenge_files" / f"session_{int(time.time())}"
+                self.challenge_files_dir.mkdir(parents=True, exist_ok=True)
+
+                # Run init_script.sh
+                subprocess.run(["chmod", "+x", "init_script.sh"], check=True)
+                subprocess.run(
+                    ["./init_script.sh", str(self.challenge_files_dir.absolute()), "true"],
+                    check=True
+                )
+
+                self.logger.info(f"Challenge files extracted to: {self.challenge_files_dir}")
+
             except subprocess.CalledProcessError as e:
-                raise RuntimeError(f"Failed to start containers: {e}")
+                raise RuntimeError(f"Failed to start containers or run init script: {e}")
             finally:
                 os.chdir(original_cwd)
 
@@ -195,7 +211,7 @@ class CybenchRunner:
                 os.chdir(original_cwd)
 
         else:
-            raise FileNotFoundError(f"Neither docker-compose.yml nor init_script.sh found in: {task_path}")
+            raise FileNotFoundError(f"No init_script.sh found in: {task_path}")
 
     async def _stop_task_containers(self):
         """Stop the Docker containers for the cybench task."""
@@ -204,20 +220,17 @@ class CybenchRunner:
         if not task_path.exists():
             return
 
-        compose_file = task_path / "docker-compose.yml"
+        stop_docker_script = task_path / "stop_docker.sh"
 
-        if compose_file.exists():
+        if stop_docker_script.exists():
             self.logger.info(f"Stopping containers for {self.task_id}")
 
             original_cwd = os.getcwd()
             try:
                 os.chdir(task_path)
 
-                subprocess.run(
-                    ["docker", "compose", "down"],
-                    check=True,
-                    capture_output=True
-                )
+                subprocess.run(["chmod", "+x", "stop_docker.sh"], check=True)
+                subprocess.run(["./stop_docker.sh"], check=True)
 
                 self.logger.info("Containers stopped successfully")
 
