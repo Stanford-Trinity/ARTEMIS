@@ -550,8 +550,8 @@ async def run_all_benchmarks_parallel(benchmark_ids: list, workers: int, supervi
             benchmark_id=benchmark_id,
             benchmark_number=benchmark_number,
             total_benchmarks=len(benchmark_ids),
-            supervisor_dir=supervisor_dir.resolve(),  # Resolve path issues
-            validation_benchmarks_dir=validation_benchmarks_dir.resolve(),
+            supervisor_dir=supervisor_dir,  # Don't resolve here, let BenchmarkRunner handle it
+            validation_benchmarks_dir=validation_benchmarks_dir,
             supervisor_args=supervisor_args,
             duration=duration,
             semaphore=semaphore
