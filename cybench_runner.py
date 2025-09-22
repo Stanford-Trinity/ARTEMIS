@@ -123,39 +123,71 @@ class CybenchRunner:
             raise RuntimeError(f"Failed to setup Docker network: {e}")
 
     async def _start_task_containers(self):
-        """Start the Docker containers for the cybench task."""
+        """Start the Docker containers for the cybench task or run init script for file-based challenges."""
         task_path = self.cybench_dir / self.task_id
 
         if not task_path.exists():
             raise FileNotFoundError(f"Task directory not found: {task_path}")
 
         compose_file = task_path / "docker-compose.yml"
-        if not compose_file.exists():
-            raise FileNotFoundError(f"docker-compose.yml not found: {compose_file}")
+        init_script = task_path / "init_script.sh"
 
-        self.logger.info(f"Starting containers for {self.task_id}")
+        if compose_file.exists():
+            # Service-based challenge with Docker containers
+            self.logger.info(f"Starting containers for {self.task_id}")
 
-        # Change to task directory and run docker compose
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(task_path)
+            # Change to task directory and run docker compose
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(task_path)
 
-            # Start containers
-            subprocess.run(
-                ["docker", "compose", "up", "-d", "--build"],
-                check=True,
-                capture_output=True
-            )
+                # Start containers
+                subprocess.run(
+                    ["docker", "compose", "up", "-d", "--build"],
+                    check=True,
+                    capture_output=True
+                )
 
-            # Wait for containers to be ready
-            await asyncio.sleep(5)
+                # Wait for containers to be ready
+                await asyncio.sleep(5)
 
-            self.logger.info("Containers started successfully")
+                self.logger.info("Containers started successfully")
 
-        except subprocess.CalledProcessError as e:
-            raise RuntimeError(f"Failed to start containers: {e}")
-        finally:
-            os.chdir(original_cwd)
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Failed to start containers: {e}")
+            finally:
+                os.chdir(original_cwd)
+
+        elif init_script.exists():
+            # File-based challenge with init script
+            self.logger.info(f"Setting up file-based challenge for {self.task_id}")
+
+            # Create temporary directory for challenge files
+            self.challenge_files_dir = self.session_dir / "challenge_files"
+            self.challenge_files_dir.mkdir(parents=True, exist_ok=True)
+
+            # Change to task directory and run init script
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(task_path)
+
+                # Make init script executable and run it
+                subprocess.run(["chmod", "+x", "init_script.sh"], check=True)
+                subprocess.run(
+                    ["./init_script.sh", str(self.challenge_files_dir)],
+                    check=True,
+                    capture_output=True
+                )
+
+                self.logger.info(f"Challenge files extracted to: {self.challenge_files_dir}")
+
+            except subprocess.CalledProcessError as e:
+                raise RuntimeError(f"Failed to run init script: {e}")
+            finally:
+                os.chdir(original_cwd)
+
+        else:
+            raise FileNotFoundError(f"Neither docker-compose.yml nor init_script.sh found in: {task_path}")
 
     async def _stop_task_containers(self):
         """Stop the Docker containers for the cybench task."""
@@ -164,24 +196,30 @@ class CybenchRunner:
         if not task_path.exists():
             return
 
-        self.logger.info(f"Stopping containers for {self.task_id}")
+        compose_file = task_path / "docker-compose.yml"
 
-        original_cwd = os.getcwd()
-        try:
-            os.chdir(task_path)
+        if compose_file.exists():
+            self.logger.info(f"Stopping containers for {self.task_id}")
 
-            subprocess.run(
-                ["docker", "compose", "down"],
-                check=True,
-                capture_output=True
-            )
+            original_cwd = os.getcwd()
+            try:
+                os.chdir(task_path)
 
-            self.logger.info("Containers stopped successfully")
+                subprocess.run(
+                    ["docker", "compose", "down"],
+                    check=True,
+                    capture_output=True
+                )
 
-        except subprocess.CalledProcessError as e:
-            self.logger.warning(f"Error stopping containers: {e}")
-        finally:
-            os.chdir(original_cwd)
+                self.logger.info("Containers stopped successfully")
+
+            except subprocess.CalledProcessError as e:
+                self.logger.warning(f"Error stopping containers: {e}")
+            finally:
+                os.chdir(original_cwd)
+        else:
+            # File-based challenge, no containers to stop
+            self.logger.info(f"File-based challenge, no containers to stop for {self.task_id}")
 
     async def _create_supervisor_config(self):
         """Create supervisor configuration for the cybench task."""
@@ -194,15 +232,25 @@ class CybenchRunner:
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
 
-        # Get target host/port info
-        target_host = metadata.get("target_host", "localhost:9999")
-        if ":" in target_host:
-            host, port = target_host.split(":", 1)
-            target_url = f"http://{target_host}"
-            target_ports = [int(port)]
+        # Check if this is a service-based or file-based challenge
+        task_path = self.cybench_dir / self.task_id
+        compose_file = task_path / "docker-compose.yml"
+        is_service_based = compose_file.exists()
+
+        if is_service_based:
+            # Service-based challenge - get target host/port info
+            target_host = metadata.get("target_host", "localhost:9999")
+            if ":" in target_host:
+                host, port = target_host.split(":", 1)
+                target_url = f"http://{target_host}"
+                target_ports = [int(port)]
+            else:
+                target_url = f"http://{target_host}"
+                target_ports = [80, 8080, 9999]  # Common ports
         else:
-            target_url = f"http://{target_host}"
-            target_ports = [80, 8080, 9999]  # Common ports
+            # File-based challenge - no target URL
+            target_url = None
+            target_ports = []
 
         # Create supervisor config
         config = {
@@ -211,8 +259,6 @@ class CybenchRunner:
             "level": f"Difficulty {metadata.get('difficulty', 'Unknown')}",
             "win_condition": "flag",
             "mode": "ctf",
-            "target_url": target_url,
-            "target_ports": target_ports,
             "task_id": self.task_id,
             "submit_function": "cybench_submit",
             "grading_enabled": True,
@@ -228,6 +274,16 @@ class CybenchRunner:
             },
             **self.supervisor_args
         }
+
+        # Add target info only for service-based challenges
+        if is_service_based:
+            config["target_url"] = target_url
+            config["target_ports"] = target_ports
+        else:
+            # For file-based challenges, specify the challenge files directory
+            if hasattr(self, 'challenge_files_dir'):
+                config["challenge_files_dir"] = str(self.challenge_files_dir)
+                config["description"] += f" Challenge files are located at: {self.challenge_files_dir}"
 
         # Save config
         config_file = self.session_dir / "supervisor_config.yaml"
@@ -266,12 +322,11 @@ def cybench_submit(flag, description=""):
         config_file = self.session_dir / "supervisor_config.yaml"
         log_file = self.session_dir / "supervisor.log"
 
-        # Build supervisor command
+        # Build supervisor command with absolute path to config
         cmd = [
             sys.executable, "-m", "codex_supervisor.supervisor",
-            "--config-file", str(config_file),
-            "--duration", str(duration_minutes),
-            "--log-file", str(log_file)
+            "--config-file", str(config_file.absolute()),
+            "--duration", str(duration_minutes)
         ]
 
         self.logger.info(f"Starting supervisor with command: {' '.join(cmd)}")
