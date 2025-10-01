@@ -2,7 +2,6 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use serde_json;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -73,7 +72,7 @@ impl RealtimeLogger {
         // Write initial context synchronously before creating logger
         {
             let file = context_file.clone();
-            let mut guard = file.try_lock().unwrap();
+            let mut guard = file.try_lock().expect("Failed to lock context file for initial write");
             
             // Write header
             guard.write_all(

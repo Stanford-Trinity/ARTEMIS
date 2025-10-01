@@ -374,11 +374,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             }
 
             // Log event to real-time logger if enabled
-            if let Some(ref logger) = realtime_logger {
-                if let Err(e) = logger.log_event(&event as &Event).await {
+            if let Some(ref logger) = realtime_logger
+                && let Err(e) = logger.log_event(&event as &Event).await {
                     error!("Failed to log event to realtime logger: {e:?}");
                 }
-            }
 
             event_processor.process_event(event);
             if is_last_event {
@@ -393,9 +392,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         // If we're in followup mode and assistant responded, wait for supervisor
         if wait_for_followup && assistant_responded {
             if let Some(ref log_dir) = log_session_dir {
-                let instance_id_str = instance_id
-                    .as_ref()
-                    .map(|s| s.as_str())
+                let instance_id_str = instance_id.as_deref()
                     .unwrap_or("unknown");
                 match wait_for_supervisor_followup(
                     log_dir,
