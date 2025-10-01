@@ -1,8 +1,8 @@
 mod cli;
 mod event_processor;
-mod realtime_logger;
 mod event_processor_with_human_output;
 mod event_processor_with_json_output;
+mod realtime_logger;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -23,13 +23,13 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
-use event_processor::EventProcessor;
-use realtime_logger::RealtimeLogger;
 use codex_login::AuthManager;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
+use event_processor::EventProcessor;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use realtime_logger::RealtimeLogger;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -223,7 +223,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         conversation_id: _,
         conversation,
         session_configured,
-    } = conversation_manager.new_conversation(config.clone()).await?;
+    } = conversation_manager
+        .new_conversation(config.clone())
+        .await?;
     info!("Codex initialized with event: {session_configured:?}");
 
     // Initialize real-time logger if requested
@@ -246,11 +248,14 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
         // Get tools configuration - create ToolsConfig with same parameters as used in Codex
         let tools = {
-            use codex_core::openai_tools::{ToolsConfig, ToolsConfigParams, get_openai_tools, create_tools_json_for_responses_api};
-            
+            use codex_core::openai_tools::{
+                ToolsConfig, ToolsConfigParams, create_tools_json_for_responses_api,
+                get_openai_tools,
+            };
+
             let approval_policy = config.approval_policy;
             let sandbox_policy = config.sandbox_policy;
-            
+
             let tools_config = ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
                 approval_policy,
@@ -260,7 +265,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             });
-            
+
             let openai_tools = get_openai_tools(&tools_config, None); // No MCP tools for now
             if !openai_tools.is_empty() {
                 match create_tools_json_for_responses_api(&openai_tools) {
@@ -375,9 +380,10 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
             // Log event to real-time logger if enabled
             if let Some(ref logger) = realtime_logger
-                && let Err(e) = logger.log_event(&event as &Event).await {
-                    error!("Failed to log event to realtime logger: {e:?}");
-                }
+                && let Err(e) = logger.log_event(&event as &Event).await
+            {
+                error!("Failed to log event to realtime logger: {e:?}");
+            }
 
             event_processor.process_event(event);
             if is_last_event {
@@ -392,8 +398,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         // If we're in followup mode and assistant responded, wait for supervisor
         if wait_for_followup && assistant_responded {
             if let Some(ref log_dir) = log_session_dir {
-                let instance_id_str = instance_id.as_deref()
-                    .unwrap_or("unknown");
+                let instance_id_str = instance_id.as_deref().unwrap_or("unknown");
                 match wait_for_supervisor_followup(
                     log_dir,
                     instance_id_str,
@@ -407,9 +412,13 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                         let followup_items: Vec<InputItem> = vec![InputItem::Text {
                             text: followup.clone(),
                         }];
-                        let followup_event_id = conversation.submit(Op::UserInput { items: followup_items }).await?;
+                        let followup_event_id = conversation
+                            .submit(Op::UserInput {
+                                items: followup_items,
+                            })
+                            .await?;
                         info!("Sent followup message with event ID: {followup_event_id}");
-                        
+
                         current_prompt = followup;
 
                         // Update status to indicate we're processing the followup

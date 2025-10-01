@@ -52,7 +52,11 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &ModelFamily, specialist: Option<&str>) -> Cow<'_, str> {
+    pub(crate) fn get_full_instructions(
+        &self,
+        model: &ModelFamily,
+        specialist: Option<&str>,
+    ) -> Cow<'_, str> {
         // Select base instructions based on specialist
         let base_instructions = match specialist {
             Some("active_directory") => ACTIVE_DIRECTORY_INSTRUCTIONS,
@@ -64,7 +68,10 @@ impl Prompt {
             Some("web") => WEB_INSTRUCTIONS,
             Some("windows_privesc") => WINDOWS_PRIVESC_INSTRUCTIONS,
             Some("verification") => BASE_INSTRUCTIONS, // Use prompt.md for verification
-            _ => self.base_instructions_override.as_deref().unwrap_or(BASE_INSTRUCTIONS), // Default to generalist
+            _ => self
+                .base_instructions_override
+                .as_deref()
+                .unwrap_or(BASE_INSTRUCTIONS), // Default to generalist
         };
 
         let mut sections: Vec<&str> = vec![base_instructions];
@@ -74,7 +81,8 @@ impl Prompt {
             OpenAiTool::Freeform(f) => f.name == "apply_patch",
             _ => false,
         });
-        if specialist.is_none() && self.base_instructions_override.is_none()
+        if specialist.is_none()
+            && self.base_instructions_override.is_none()
             && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
