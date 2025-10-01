@@ -42,7 +42,7 @@ uv sync
 source .venv/bin/activate
 ```
 
-At this point, you will be in the `./supervisor` directory. This is where the supervisor runs out of. Look at `../docs/supervisor-usage.md` for how to configure the agent.
+At this point, you will be in the [supervisor](supervisor) directory. This is where the supervisor runs out of. Look at [supervisor-usage.md](docs/supervisor-usage.md) for how to configure the agent.
 
 ---
 
