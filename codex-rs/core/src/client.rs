@@ -163,7 +163,8 @@ impl ModelClient {
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
-        let full_instructions = prompt.get_full_instructions(&self.config.model_family, self.specialist.as_deref());
+        let full_instructions =
+            prompt.get_full_instructions(&self.config.model_family, self.specialist.as_deref());
         let mut tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         // ChatGPT backend expects the preview name for web search.
         if auth_mode == Some(AuthMode::ChatGPT) {

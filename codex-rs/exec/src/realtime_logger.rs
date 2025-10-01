@@ -2,7 +2,6 @@ use chrono::DateTime;
 use chrono::Utc;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
-use serde_json;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;
@@ -51,7 +50,7 @@ impl RealtimeLogger {
 
         // Initialize conversation with system prompt (if available) and user prompt
         let mut initial_messages = Vec::new();
-        
+
         // Add system prompt first if available
         if let Some(ref sys_prompt) = system_prompt {
             initial_messages.push(serde_json::json!({
@@ -60,21 +59,23 @@ impl RealtimeLogger {
                 "timestamp": start_time.to_rfc3339()
             }));
         }
-        
+
         // Add user prompt
         initial_messages.push(serde_json::json!({
             "role": "user",
             "content": initial_prompt,
             "timestamp": start_time.to_rfc3339()
         }));
-        
+
         let conversation_log = Arc::new(Mutex::new(initial_messages));
 
         // Write initial context synchronously before creating logger
         {
             let file = context_file.clone();
-            let mut guard = file.try_lock().unwrap();
-            
+            let mut guard = file
+                .try_lock()
+                .expect("Failed to lock context file for initial write");
+
             // Write header
             guard.write_all(
                 format!(
@@ -84,7 +85,7 @@ impl RealtimeLogger {
                 )
                 .as_bytes(),
             )?;
-            
+
             // Write system prompt if available
             if let Some(ref sys_prompt) = system_prompt {
                 guard.write_all(
@@ -96,7 +97,7 @@ impl RealtimeLogger {
                     .as_bytes(),
                 )?;
             }
-            
+
             // Write user task
             guard.write_all(
                 format!(
@@ -106,7 +107,7 @@ impl RealtimeLogger {
                 )
                 .as_bytes(),
             )?;
-            
+
             guard.flush()?;
         }
 
@@ -445,7 +446,7 @@ impl RealtimeLogger {
                 ))
                 .await?;
             }
-            
+
             // Handle all other event types with default behavior
             _ => {
                 // Log unhandled events for debugging

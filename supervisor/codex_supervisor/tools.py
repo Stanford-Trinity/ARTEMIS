@@ -11,7 +11,7 @@ from typing import Dict, Any, List
 import aiofiles
 
 class SupervisorTools:
-    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None, submission_config=None):
+    def __init__(self, instance_manager, log_reader, session_dir: Path, context_manager=None, benchmark_mode=False, triage_manager=None, submission_config=None, orchestrator=None):
         self.instance_manager = instance_manager
         self.log_reader = log_reader
         self.session_dir = session_dir
@@ -19,6 +19,7 @@ class SupervisorTools:
         self.benchmark_mode = benchmark_mode
         self.triage_manager = triage_manager
         self.submission_config = submission_config or {}
+        self.orchestrator = orchestrator
         self.notes_dir = session_dir / "supervisor_notes"
         self.notes_dir.mkdir(exist_ok=True)
         self.todo_file = session_dir / "supervisor_todo.json"
@@ -102,10 +103,6 @@ class SupervisorTools:
                             "task_description": {
                                 "type": "string",
                                 "description": "Task for this codex instance to work on"
-                            },
-                            "workspace_dir": {
-                                "type": "string",
-                                "description": "Working directory name for this instance (optional)"
                             },
                             "duration_minutes": {
                                 "type": "number",
@@ -222,27 +219,6 @@ class SupervisorTools:
                         "type": "object",
                         "properties": {},
                         "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "submit",
-                    "description": "Submit a vulnerability report for processing",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "title": {"type": "string", "description": "Vulnerability title"},
-                            "asset": {"type": "string", "description": "Affected asset"},
-                            "vuln_type": {"type": "string", "description": "Type of vulnerability"},
-                            "severity": {"type": "string", "description": "Severity rating"},
-                            "description": {"type": "string", "description": "Detailed description"},
-                            "repro_steps": {"type": "string", "description": "Reproduction steps"},
-                            "impact": {"type": "string", "description": "Impact summary"},
-                            "cleanup": {"type": "string", "description": "Cleanup instructions"}
-                        },
-                        "required": ["title", "asset", "vuln_type", "severity", "description", "repro_steps", "impact", "cleanup"]
                     }
                 }
             },
@@ -491,6 +467,9 @@ class SupervisorTools:
                 # Benchmark mode: check if this is a submission handler tool call
                 schema = self.submission_handler.get_submission_schema()
                 if schema.get("function", {}).get("name") == tool_name:
+                    # Track that a submission was made for finish_on_submit mode
+                    if self.orchestrator:
+                        self.orchestrator.submission_made = True
                     result = await self.submission_handler.submit(arguments)
                     return result.message
             else:
@@ -505,10 +484,9 @@ class SupervisorTools:
         """Spawn a new codex instance."""
         instance_id = args["instance_id"]
         task_description = args["task_description"]
-        workspace_dir = args.get("workspace_dir", instance_id)
+        workspace_dir = instance_id
         duration_minutes = args.get("duration_minutes", 60)
         
-        # Instance manager now handles routing/prompt generation internally
         success = await self.instance_manager.spawn_instance(
             instance_id, task_description, workspace_dir, duration_minutes
         )
@@ -626,13 +604,20 @@ class SupervisorTools:
             "cleanup": args["cleanup"]
         }
         
+        # Track that a submission was made for finish_on_submit mode
+        if self.orchestrator:
+            self.orchestrator.submission_made = True
+
         # In benchmark mode, skip triage and go directly to Slack
         if self.benchmark_mode:
-            return await self._send_directly_to_slack(payload)
-        
-        # Normal mode: submit to triage queue
+            if self.submission_handler:
+                await self.submission_handler._send_directly_to_slack(payload)
+                return f"✅ Vulnerability report sent to Slack: {args['title']} (benchmark mode)"
+            else:
+                return f"❌ Submission handler not available - vulnerability cannot be submitted: {args['title']}"
         if self.triage_manager:
-            return await self.triage_manager.submit_vulnerability_report(payload)
+            await self.triage_manager.submit_vulnerability_report(payload)
+            return f"✅ Vulnerability report sent to triage queue: {args['title']} (normal mode)"
         else:
             return f"❌ Triage manager not available - vulnerability cannot be submitted: {args['title']}"
     
@@ -801,13 +786,14 @@ class SupervisorTools:
                 return f"✅ Added todo item '{description}' with ID: {new_id}"
             
             elif action == "add_subtask":
-                if not item_id or not description:
+                parent_id = args.get("parent_id")
+                if not parent_id or not description:
                     return "❌ Parent ID and description are required for adding subtasks"
                 
                 # Find the parent todo item recursively
-                parent_todo, parent_list = self._find_todo_recursive(todos, item_id)
+                parent_todo, parent_list = self._find_todo_recursive(todos, parent_id)
                 if not parent_todo:
-                    return f"❌ Parent todo item with ID '{item_id}' not found"
+                    return f"❌ Parent todo item with ID '{parent_id}' not found"
                 
                 # Generate new subtask ID
                 new_id = str(uuid.uuid4())[:8]
@@ -942,12 +928,8 @@ class SupervisorTools:
         if instance["status"] != "running":
             return f"❌ Instance {instance_id} is not running (status: {instance['status']})"
         
-        # Use the duplicated path structure where codex actually writes files
-        workspace_dir = instance["workspace_dir"]
-        session_id = self.session_dir.name  # Extract session_id from session_dir path
-        actual_log_dir = self.session_dir / "workspaces" / workspace_dir / "logs" / session_id / "workspaces" / workspace_dir
-        status_file = actual_log_dir / "status.json"
-        
+        instance_log_dir = instance["log_dir"]
+        status_file = instance_log_dir / "status.json"
         timeout_seconds = timeout_minutes * 60
         start_time = asyncio.get_event_loop().time()
         
@@ -969,7 +951,7 @@ class SupervisorTools:
                     # Check timeout
                     if elapsed >= timeout_seconds:
                         # Before timing out, try to get the last assistant message
-                        conversation_file = actual_log_dir / "realtime_conversation.json"
+                        conversation_file = instance_log_dir / "realtime_conversation.json"
                         last_response = "No response available"
                         if conversation_file.exists():
                             try:
@@ -1008,7 +990,7 @@ class SupervisorTools:
                         if current_status == "waiting_for_followup":
                             logging.info(f"🔄 Instance {instance_id} needs followup, breaking wait loop")
                             # Read the latest response from final_result.json
-                            final_result_file = actual_log_dir / "final_result.json"
+                            final_result_file = instance_log_dir / "final_result.json"
                             last_response = "No response available"
                             if final_result_file.exists():
                                 try:

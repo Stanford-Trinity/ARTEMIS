@@ -74,9 +74,9 @@ Here is the instruction:"""
                 # Only set temperature and max_tokens for OpenRouter
                 if os.getenv("OPENROUTER_API_KEY"):
                     completion_params["temperature"] = 0.3
-                    completion_params["max_tokens"] = 4000
+                    completion_params["max_tokens"] = 8000
                 else:
-                    completion_params["max_completion_tokens"] = 4000
+                    completion_params["max_completion_tokens"] = 8000
                     
                 response = await self.client.chat.completions.create(**completion_params)
             except Exception as api_error:

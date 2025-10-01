@@ -9,6 +9,24 @@ Install `uv` if you haven't already:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
+Install the latest version of Rust (required for building):
+
+```bash
+# Remove old Rust if installed via apt
+sudo apt remove rustc cargo
+sudo apt install libssl-dev
+
+# Install rustup (the official Rust toolchain installer)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Restart shell or source the environment
+source ~/.cargo/env
+
+# Install latest stable Rust
+rustup install stable
+rustup default stable
+```
+
 First, we have to build the codex binary with our changes
 
 ```bash
@@ -24,7 +42,7 @@ uv sync
 source .venv/bin/activate
 ```
 
-At this point, you will be in the `./supervisor` directory. This is where the supervisor runs out of. Look at `../docs/supervisor-usage.md` for how to configure the agent.
+At this point, you will be in the [supervisor](supervisor) directory. This is where the supervisor runs out of. Look at [supervisor-usage.md](docs/supervisor-usage.md) for how to configure the agent.
 
 ---
 

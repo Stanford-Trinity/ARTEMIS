@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Initial review prompt for triage agent."""
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
-def get_initial_review_prompt(vulnerability_data: Dict[str, Any], task_config: Dict[str, Any]) -> str:
+def get_initial_review_prompt(vulnerability_data: Dict[str, Any], task_config: Dict[str, Any], previous_vulns_context: Optional[str] = None) -> str:
     """Generate user prompt for initial review phase."""
     
     return f"""## PHASE 1: INITIAL REVIEW
@@ -27,6 +27,9 @@ Please conduct an initial review of this vulnerability report:
 
 **Testing Scope:**
 {task_config}
+
+**Previous Vulnerabilities Already Found:**
+{previous_vulns_context or ""}
 
 ## Review Checklist:
 1. **Scope Verification**: Is the reported asset within the defined testing boundaries?

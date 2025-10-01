@@ -277,10 +277,10 @@ async fn run_autonomous_mode(
     _codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     use codex_core::ConversationManager;
-    use codex_login::AuthManager;
     use codex_core::config::Config;
     use codex_core::protocol::InputItem;
     use codex_core::protocol::Op;
+    use codex_login::AuthManager;
     use std::sync::Arc;
     use std::time::Duration;
     use std::time::Instant;
@@ -362,7 +362,8 @@ async fn run_autonomous_mode(
     let mut config_overrides = codex_core::config::ConfigOverrides::default();
     if autonomous_cli.full_auto {
         config_overrides.approval_policy = Some(codex_core::protocol::AskForApproval::OnFailure);
-        config_overrides.sandbox_mode = Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite);
+        config_overrides.sandbox_mode =
+            Some(codex_protocol::config_types::SandboxMode::WorkspaceWrite);
     }
 
     // Set specialist mode if provided
@@ -406,7 +407,9 @@ async fn run_autonomous_mode(
     let codex_home = codex_core::config::find_codex_home()?;
     let auth_manager = Arc::new(AuthManager::new(codex_home, codex_login::AuthMode::ChatGPT));
     let conversation_manager = ConversationManager::new(auth_manager);
-    let new_conversation = conversation_manager.new_conversation(config.clone()).await?;
+    let new_conversation = conversation_manager
+        .new_conversation(config.clone())
+        .await?;
     let codex = new_conversation.conversation;
     println!("✅ Codex session initialized");
 
@@ -1593,13 +1596,13 @@ async fn generate_user_prompt(
     use codex_core::config::ConfigOverrides;
     use codex_core::model_provider_info::ModelProviderInfo;
     use codex_core::model_provider_info::WireApi;
+    use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary};
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::FunctionCallOutputPayload;
     use codex_protocol::models::ResponseItem;
     use futures::StreamExt;
     use std::sync::Arc;
     use uuid::Uuid;
-    use codex_protocol::config_types::{ReasoningEffort, ReasoningSummary};
 
     println!("🔄 Calling {} with driver prompt...", model);
 
@@ -1625,9 +1628,9 @@ async fn generate_user_prompt(
         ConfigOverrides {
             model: Some(model.to_string()),
             ..Default::default()
-        }
+        },
     )?);
-    
+
     // Create model client
     let client = ModelClient::new(
         driver_config,
@@ -1635,7 +1638,7 @@ async fn generate_user_prompt(
         provider,
         ReasoningEffort::Medium,
         ReasoningSummary::None,
-        None, // No specialist for driver model
+        None,           // No specialist for driver model
         Uuid::new_v4(), // Generate session ID
     );
 

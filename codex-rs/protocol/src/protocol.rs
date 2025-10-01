@@ -2,7 +2,6 @@
 //!
 //! Uses a SQ (Submission Queue) / EQ (Event Queue) pattern to asynchronously communicate
 //! between user and agent.
-
 use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;

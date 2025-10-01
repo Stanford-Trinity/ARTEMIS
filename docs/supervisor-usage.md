@@ -113,11 +113,13 @@ python -m codex_supervisor.supervisor [OPTIONS]
 | `--benchmark-mode` | - | No | False | Enable benchmark mode (modular submissions) |
 | `--skip-todos` | - | No | False | Skip initial TODO generation step |
 | `--use-prompt-generation` | - | No | False | Use LLM to generate custom system prompts instead of routing |
+| `--finish-on-submit` | - | No | False | Finish session when a vulnerability is submitted (instead of continuing until duration expires) |
 
 ## Modes
 
 **Normal Mode**: Vulnerabilities go through triage process (validation, classification)
 **Benchmark Mode**: Uses modular submission system for specialized testing (e.g., CTF challenges, direct submissions)
+**Finish-on-Submit Mode**: Session ends early when a vulnerability is submitted (use with `--finish-on-submit`)
 
 ## Benchmark Mode Configuration
 
@@ -182,4 +184,23 @@ python -m codex_supervisor.supervisor \
   --config-file ../configs/stanford/level1.yaml \
   --skip-todos \
   --duration 90
+```
+
+### Finish on Submit Mode
+```bash
+# Run for up to 120 minutes, but end early if a vulnerability is submitted
+python -m codex_supervisor.supervisor \
+  --config-file ../configs/stanford/level1.yaml \
+  --finish-on-submit \
+  --duration 120
+```
+
+### Finish on Submit with Benchmark Mode
+```bash
+# End session immediately after CTF flag submission
+python -m codex_supervisor.supervisor \
+  --config-file ../configs/tests/ctf_easy.yaml \
+  --benchmark-mode \
+  --finish-on-submit \
+  --duration 60
 ```

@@ -22,6 +22,7 @@ from .prompts.severity_prompt import get_severity_prompt
 from .triage_tools import TriageTools
 from ..orchestration.instance_manager import InstanceManager
 from ..orchestration.log_reader import LogReader
+from ..vulnerability_storage import get_session_vulnerability_storage
 
 
 class TriagerInstance:
@@ -80,6 +81,9 @@ class TriagerInstance:
             max_instances=self.max_instances
         )
         
+        # Set triager ID for vulnerability tracking
+        self.triage_tools.triager_id = triager_id
+        
         logging.info(f"🔍 Initialized TriagerInstance {triager_id} for: {vulnerability_data.get('title', 'Unknown')}")
     
     async def run_triage(self) -> Dict[str, Any]:
@@ -89,6 +93,11 @@ class TriagerInstance:
         try:
             logging.info(f"🔍 Starting triage process for: {self.vulnerability_data.get('title', 'Unknown')}")
             
+            # Load previous vulnerabilities for duplicate checking
+            storage = get_session_vulnerability_storage(self.session_dir.parent)  # Get session dir from triager dir
+            previous_vulns = await storage.get_vulnerability_summaries()
+            vulns_context = storage.format_summaries_for_prompt(previous_vulns)
+            
             # Initialize conversation with system prompt
             self.conversation_history = [
                 {"role": "system", "content": get_triage_system_prompt()}
@@ -97,8 +106,8 @@ class TriagerInstance:
             # Set vulnerability data in tools
             self.triage_tools.set_vulnerability_data(self.vulnerability_data)
             
-            # Start Phase 1: Initial Review
-            phase1_prompt = get_initial_review_prompt(self.vulnerability_data, self.task_config)
+            # Start Phase 1: Initial Review with previous vulnerabilities context
+            phase1_prompt = get_initial_review_prompt(self.vulnerability_data, self.task_config, vulns_context)
             self.conversation_history.append({"role": "user", "content": phase1_prompt})
             
             # Run conversation until completion
@@ -155,7 +164,6 @@ class TriagerInstance:
             
             elif self.current_phase == 3 and 3 in phase_results:
                 # Phase 3 completed - send to Slack and write success feedback
-                await self._send_to_slack_and_notify(phase_results)
                 return {
                     "final_result": "COMPLETED",
                     "severity": phase_results[3]["severity"],
@@ -272,32 +280,6 @@ Please review and address the issues before resubmitting."""
             await f.write(feedback_content)
         
         logging.info(f"📤 Wrote rejection feedback for {self.triager_id}")
-    
-    async def _send_to_slack_and_notify(self, phase_results: Dict[str, Any]):
-        """Send completed vulnerability to Slack and notify supervisor."""
-        
-        # TODO: Implement actual Slack submission
-        severity = phase_results[3]["severity"]
-        cvss_score = phase_results[3]["cvss_score"]
-        
-        logging.info(f"📤 [PLACEHOLDER] Would send to Slack: {self.vulnerability_data.get('title', 'Unknown')} - {severity} ({cvss_score})")
-        
-        # Notify supervisor of successful triage
-        success_feedback = f"""✅ **Triage Complete: Vulnerability Confirmed**
-
-**Report**: {self.vulnerability_data.get('title', 'Unknown')}
-**Triage ID**: {self.triager_id}
-**Final Classification**: {severity} (CVSS: {cvss_score})
-
-The vulnerability has been successfully reproduced and classified. It has been submitted to the appropriate team for further action.
-
-No further action needed from your side."""
-        
-        # Write success feedback file
-        async with aiofiles.open(self.feedback_file, 'w') as f:
-            await f.write(success_feedback)
-        
-        logging.info(f"📤 Wrote success feedback for {self.triager_id}")
     
     async def _log_conversation_entry(self, response_content: str, tool_calls):
         """Log conversation entry to human-readable file."""

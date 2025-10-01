@@ -84,12 +84,15 @@ You have successfully reproduced this vulnerability in Phase 2. Now classify its
 
 ## Your Task:
 Based on your successful reproduction and the CVSS framework above, assign an appropriate severity level to this vulnerability.
+Then, call the `submit` tool to submit the finalized vulnerability report.
 
-When you're ready to complete Phase 3, call `finished_phase_3` with:
+Then, when that has been finished and you're ready to complete Phase 3, call `finished_phase_3` with:
 - **severity**: "Critical", "High", "Medium", or "Low"
 - **cvss_score**: Numeric score (0.0-10.0)
 - **cvss_vector**: Full CVSS vector string (e.g., "AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H")
 - **reasoning**: Detailed explanation of your severity assessment
 - **comparison**: How this differs from the originally reported severity (if applicable)
+
+to finalize the phase
 
 Provide a thorough analysis explaining why this vulnerability deserves its assigned severity level."""
