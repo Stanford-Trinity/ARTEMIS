@@ -1,1 +1,0 @@
-python3 -m codex_supervisor.supervisor -f ../configs/level0.yaml -d 10 -v --ignore-work-hours -m openai/o3 --codex-binary ./codex > ../logs/supervisor.log 2>&1 &
