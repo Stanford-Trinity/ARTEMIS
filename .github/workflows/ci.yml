@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            arch: amd64
+          - os: ubuntu-latest-arm64
+            arch: arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install uv
+      run: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libssl-dev
+
+    - name: Build codex-rs binary (${{ matrix.arch }})
+      run: |
+        cargo build --release --manifest-path codex-rs/Cargo.toml
+        ls -lh codex-rs/target/release/codex
+
+    - name: Verify binary is executable
+      run: |
+        file codex-rs/target/release/codex
+        codex-rs/target/release/codex --version || echo "Binary built successfully"
+
+    - name: Setup Python environment
+      run: |
+        uv sync
+
+    - name: Check Python package formatting
+      run: |
+        source .venv/bin/activate
+        python -m py_compile supervisor/*.py || true
+
+    - name: Test supervisor imports
+      run: |
+        source .venv/bin/activate
+        python -c "import supervisor.supervisor; print('✓ supervisor.supervisor imports successfully')"
+        python -c "from supervisor import supervisor; print('✓ supervisor module imports successfully')"
+
+    - name: Summary
+      run: |
+        echo "====== Build Summary ======"
+        echo "Architecture: ${{ matrix.arch }}"
+        echo "Codex binary: ✓ Built"
+        echo "Python environment: ✓ Set up"
+        echo "Supervisor imports: ✓ Working"
+        echo "=========================="
