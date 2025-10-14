@@ -1,7 +1,0 @@
-[mcp_servers.bugcrowd]
-command = "node"
-args = ["/Users/eliot/Desktop/work/papers/codex/mcp-bugcrowd/dist/index.js"]
-
-[sandbox]
-mode = "workspace-write"
-network_access = true

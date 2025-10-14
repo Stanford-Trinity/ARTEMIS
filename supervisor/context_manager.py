@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""Context management utilities for the supervisor system."""
+
+import asyncio
+import json
+import logging
+import tiktoken
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Dict, Any, List, Optional
+from openai import AsyncOpenAI
+import os
+from .prompts.summarization_prompt import get_summarization_prompt
+
+class ContextManager:
+    """Manages conversation context and token limits for the supervisor."""
+    
+    def __init__(self, max_tokens: int = 200_000, buffer_tokens: int = 15_000, 
+                 summarization_model: str = "openai/o4-mini"):
+        self.max_tokens = max_tokens
+        self.buffer_tokens = buffer_tokens
+        
+        # Use environment variable if set, otherwise choose default based on API provider
+        if os.getenv("SUMMARIZATION_MODEL"):
+            self.summarization_model = os.getenv("SUMMARIZATION_MODEL")
+        else:
+            # Default model based on which API is being used
+            if os.getenv("OPENROUTER_API_KEY"):
+                self.summarization_model = "openai/o4-mini"  # OpenRouter format
+            else:
+                self.summarization_model = "o4-mini"  # OpenAI direct format
+        
+        try:
+            self.tokenizer = tiktoken.get_encoding("o200k_base")
+        except KeyError:
+            self.tokenizer = tiktoken.get_encoding("cl100k_base")
+        
+        
+        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+        
+        self.client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key
+        )
+        
+        logging.info(f"🧠 ContextManager initialized: {max_tokens:,} max tokens, {buffer_tokens:,} buffer (triggers at {max_tokens - buffer_tokens:,})")
+    
+    def count_tokens(self, messages: List[Dict[str, Any]]) -> int:
+        """Count tokens in a list of messages."""
+        total_tokens = 0
+        
+        for message in messages:
+            # Ensure all content is string before tokenizing
+            role = str(message.get("role", ""))
+            content = str(message.get("content", ""))
+            
+            total_tokens += len(self.tokenizer.encode(role))
+            total_tokens += len(self.tokenizer.encode(content))
+            
+            if "tool_calls" in message:
+                for tool_call in message["tool_calls"]:
+                    func_name = str(tool_call.get("function", {}).get("name", ""))
+                    func_args = str(tool_call.get("function", {}).get("arguments", ""))
+                    total_tokens += len(self.tokenizer.encode(func_name))
+                    total_tokens += len(self.tokenizer.encode(func_args))
+            
+            if "tool_call_id" in message:
+                tool_id = str(message["tool_call_id"])
+                total_tokens += len(self.tokenizer.encode(tool_id))
+        
+        return total_tokens
+    
+    def should_summarize(self, messages: List[Dict[str, Any]]) -> bool:
+        """Check if conversation should be summarized due to token limit."""
+        token_count = self.count_tokens(messages)
+        return token_count >= (self.max_tokens - self.buffer_tokens)
+    
+    async def summarize_conversation(self, messages: List[Dict[str, Any]], 
+                                   preserve_recent: int = 20) -> List[Dict[str, Any]]:
+        """Summarize conversation history while preserving system, initial user, and recent messages."""
+        if len(messages) <= preserve_recent + 2:  # +2 for system message and initial user message
+            return messages
+        
+        system_message = messages[0] if messages and messages[0]["role"] == "system" else None
+        initial_user_message = None
+        
+        for i, msg in enumerate(messages[1:], 1):
+            if msg.get("role") == "user":
+                initial_user_message = msg
+                initial_user_idx = i
+                break
+        
+        recent_messages = messages[-preserve_recent:]
+        
+        start_idx = initial_user_idx + 1 if initial_user_message else (1 if system_message else 0)
+        messages_to_summarize = messages[start_idx:-preserve_recent] if preserve_recent > 0 else messages[start_idx:]
+        
+        if initial_user_message and initial_user_message in recent_messages:
+            initial_user_message = None  # Don't duplicate it
+        
+        if not messages_to_summarize:
+            return messages
+        
+        context_text = self._format_messages_for_summary(messages_to_summarize)
+        
+        original_tokens = self.count_tokens(messages)
+        logging.info(f"🔄 Context too long ({original_tokens:,} tokens), summarizing...")
+        
+        summary_content = await self._get_summary(context_text)
+        
+        new_messages = []
+        
+        if system_message:
+            new_messages.append(system_message)
+        
+        if initial_user_message:
+            new_messages.append(initial_user_message)
+        
+        new_messages.append({
+            "role": "user",
+            "content": summary_content
+        })
+        
+        # Fix orphaned tool messages before extending
+        validated_recent_messages = self._validate_tool_message_structure(recent_messages)
+        new_messages.extend(validated_recent_messages)
+        
+        new_tokens = self.count_tokens(new_messages)
+        logging.info(f"✅ Context summarized from {original_tokens:,} to {new_tokens:,} tokens")
+        
+        return new_messages
+    
+    def _validate_tool_message_structure(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Validate and fix tool message structure to ensure all tool messages 
+        have corresponding tool_calls in the message sequence.
+        
+        Removes orphaned tool messages that don't have a preceding assistant 
+        message with matching tool_calls.
+        """
+        if not messages:
+            return messages
+            
+        validated = []
+        tool_call_ids = set()
+        
+        for msg in messages:
+            role = msg.get("role")
+            
+            if role == "assistant" and "tool_calls" in msg:
+                # Track tool call IDs from this assistant message
+                for tool_call in msg.get("tool_calls", []):
+                    tool_call_ids.add(tool_call.get("id"))
+                validated.append(msg)
+                
+            elif role == "tool":
+                # Only include tool message if its tool_call_id is in our tracked set
+                tool_call_id = msg.get("tool_call_id")
+                if tool_call_id in tool_call_ids:
+                    validated.append(msg)
+                else:
+                    # Log the orphaned tool message for debugging
+                    logging.warning(f"🔧 Removed orphaned tool message with ID: {tool_call_id}")
+                    
+            else:
+                # Include all other message types (user, assistant without tool_calls, etc.)
+                validated.append(msg)
+                
+        return validated
+    
+    def _format_messages_for_summary(self, messages: List[Dict[str, Any]]) -> str:
+        """Format messages for summarization prompt."""
+        formatted_lines = []
+        
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            
+            if role == "user":
+                formatted_lines.append(f"USER: {content}")
+            elif role == "assistant":
+                formatted_lines.append(f"ASSISTANT: {content}")
+                
+                if "tool_calls" in msg:
+                    for tool_call in msg["tool_calls"]:
+                        func_name = tool_call.get("function", {}).get("name", "")
+                        func_args = tool_call.get("function", {}).get("arguments", "")
+                        formatted_lines.append(f"  TOOL_CALL: {func_name}({func_args})")
+            elif role == "tool":
+                tool_id = msg.get("tool_call_id", "unknown")
+                formatted_lines.append(f"TOOL_RESULT[{tool_id}]: {content}")
+        
+        return "\n".join(formatted_lines)
+    
+    async def _get_summary(self, context: str) -> str:
+        """Get conversation summary from LLM."""
+        summary_prompt = get_summarization_prompt(context)
+        
+        try:
+            # Use correct parameters based on API provider
+            completion_params = {
+                "model": self.summarization_model,
+                "messages": [{"role": "user", "content": summary_prompt}],
+            }
+            
+            # Only set temperature and max_tokens for OpenRouter
+            if os.getenv("OPENROUTER_API_KEY"):
+                completion_params["temperature"] = 0.1
+                completion_params["max_tokens"] = 10000
+            else:
+                completion_params["max_completion_tokens"] = 10000
+                
+            response = await self.client.chat.completions.create(**completion_params)
+            
+            return response.choices[0].message.content or "Summary generation failed"
+            
+        except Exception as e:
+            logging.error(f"❌ ContextManager: Summarization failed: {type(e).__name__}: {e}")
+            return f"## Session Summary\nPrevious conversation context has been truncated due to length. {len(context.split())} words of supervisor activity occurred before this point."
+
+    
+    def get_context_stats(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Get context statistics for monitoring."""
+        token_count = self.count_tokens(messages)
+        return {
+            "total_messages": len(messages),
+            "total_tokens": token_count,
+            "max_tokens": self.max_tokens,
+            "buffer_remaining": max(0, self.max_tokens - self.buffer_tokens - token_count),
+            "should_summarize": self.should_summarize(messages),
+            "utilization_percent": round((token_count / self.max_tokens) * 100, 1)
+        }

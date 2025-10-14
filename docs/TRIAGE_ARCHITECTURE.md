@@ -89,7 +89,7 @@ The triage system processes vulnerability reports through a 3-phase workflow, wi
 ## File Structure
 
 ```
-codex_supervisor/
+supervisor/
 ├── orchestration/
 │   ├── orchestrator.py          # Main supervisor logic
 │   ├── instance_manager.py      # Codex instance management
