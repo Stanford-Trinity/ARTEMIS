@@ -10,7 +10,6 @@ RUN apt-get update && \
     pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
     ~/.cargo/bin/rustup install stable && \
     ~/.cargo/bin/rustup default stable
@@ -23,16 +22,9 @@ COPY . /app/trinity/ARTEMIS
 
 WORKDIR /app/trinity/ARTEMIS
 
-RUN cd codex-rs && cargo build --release && \
-cp target/release/codex ../supervisor/codex
-
-WORKDIR /app/trinity/ARTEMIS/supervisor
+RUN cargo build --release --manifest-path codex-rs/Cargo.toml
 
 RUN uv sync
 
-ENV VIRTUAL_ENV=/app/trinity/ARTEMIS/supervisor/.venv
+ENV VIRTUAL_ENV=/app/trinity/ARTEMIS/.venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
-
-
-
-
