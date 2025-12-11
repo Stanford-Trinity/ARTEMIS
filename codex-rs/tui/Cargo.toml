@@ -80,7 +80,7 @@ tokio = { version = "1", features = [
 tokio-stream = "0.1.17"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 tui-input = "0.14.0"
 tui-markdown = "0.3.3"
 unicode-segmentation = "1.12.0"
