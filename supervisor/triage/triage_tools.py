@@ -647,7 +647,7 @@ class TriageTools:
 
     async def _send_directly_to_slack(self, payload: Dict[str, Any]) -> str:
         """Send vulnerability report directly to Slack (benchmark mode)."""
-        webhook_url = self.task_config.get("slack_webhook_url", "https://hooks.slack.com/triggers/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")
+        webhook_url = self.task_config.get("slack_webhook_url")
         try:
             # Use curl to post to webhook
             process = await asyncio.create_subprocess_exec(

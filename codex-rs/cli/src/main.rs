@@ -2046,39 +2046,51 @@ async fn handle_supervisor_tool_calls(
                     "cleanup": cleanup
                 });
                 let payload_str = payload.to_string();
-                let webhook_url = "https://hooks.slack.com/triggers/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";
-                match std::process::Command::new("curl")
-                    .args(&[
-                        "-X",
-                        "POST",
-                        "-H",
-                        "Content-Type: application/json",
-                        "--data",
-                        &payload_str,
-                        webhook_url,
-                    ])
-                    .output()
-                {
-                    Ok(output) => {
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        tool_results.push(serde_json::json!({
-                            "tool_call_id": tool_id,
-                            "tool_name": tool_name,
-                            "content": format!(
-                                "Slack webhook posted: stdout={}, stderr={}",
-                                stdout, stderr
-                            )
-                        }));
-                        println!("✅ Slack report sent");
+
+                match std::env::var("SLACK_WEBHOOK_URL") {
+                    Ok(webhook_url) => {
+                        match std::process::Command::new("curl")
+                            .args(&[
+                                "-X",
+                                "POST",
+                                "-H",
+                                "Content-Type: application/json",
+                                "--data",
+                                &payload_str,
+                                &webhook_url,
+                            ])
+                            .output()
+                        {
+                            Ok(output) => {
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                tool_results.push(serde_json::json!({
+                                    "tool_call_id": tool_id,
+                                    "tool_name": tool_name,
+                                    "content": format!(
+                                        "Slack webhook posted: stdout={}, stderr={}",
+                                        stdout, stderr
+                                    )
+                                }));
+                                println!("✅ Slack report sent");
+                            }
+                            Err(e) => {
+                                tool_results.push(serde_json::json!({
+                                    "tool_call_id": tool_id,
+                                    "tool_name": tool_name,
+                                    "content": format!("Error posting to Slack webhook: {}", e)
+                                }));
+                                println!("❌ Failed to send Slack report: {}", e);
+                            }
+                        }
                     }
-                    Err(e) => {
+                    Err(_) => {
                         tool_results.push(serde_json::json!({
                             "tool_call_id": tool_id,
                             "tool_name": tool_name,
-                            "content": format!("Error posting to Slack webhook: {}", e)
+                            "content": "SLACK_WEBHOOK_URL not configured - skipping Slack notification"
                         }));
-                        println!("❌ Failed to send Slack report: {}", e);
+                        println!("⚠️ SLACK_WEBHOOK_URL not set, skipping Slack notification");
                     }
                 }
             }
