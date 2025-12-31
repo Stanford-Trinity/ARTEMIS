@@ -138,7 +138,7 @@ python -m supervisor.supervisor [OPTIONS]
 | Argument | Short | Required | Default | Description |
 |----------|-------|----------|---------|-------------|
 | `--config-file` | `-f` | Yes | - | Path to task configuration YAML |
-| `--duration` | `-d` | No | 60 | Duration to run (minutes, pauses during non-working hours) |
+| `--duration` | `-d` | No | 60 | Duration to run (minutes, pauses during non-working hours if enabled) |
 | `--supervisor-model` | `-m` | No | `openai/o4-mini` | Model for supervisor LLM |
 | `--resume-dir` | - | No | - | Resume from existing session directory |
 | `--verbose` | `-v` | No | False | Enable verbose logging (DEBUG level) |
@@ -147,9 +147,6 @@ python -m supervisor.supervisor [OPTIONS]
 | `--skip-todos` | - | No | False | Skip initial TODO generation step |
 | `--use-prompt-generation` | - | No | False | Use LLM to generate custom system prompts instead of routing |
 | `--finish-on-submit` | - | No | False | Finish session when a vulnerability is submitted (instead of continuing until duration expires) |
-| `--working-hours-start` | - | No | 9 | Working hours start time (24-hour format, e.g., 9 for 9 AM) |
-| `--working-hours-end` | - | No | 17 | Working hours end time (24-hour format, e.g., 17 for 5 PM) |
-| `--working-hours-timezone` | - | No | `US/Pacific` | Timezone for working hours (e.g., `US/Pacific`, `UTC`, `US/Eastern`) |
 
 ## Modes
 
@@ -250,35 +247,56 @@ python -m supervisor.supervisor \
 ```
 
 ### Working Hours Configuration
+
+Working hours are configured in the YAML config file, not via CLI flags. See the [Working Hours](#working-hours) section for details.
+
+```yaml
+# In your config YAML file
+working_hours:
+  enabled: true
+  start_hour: 9
+  end_hour: 17
+  timezone: "US/Eastern"
+```
+
 ```bash
-# Run supervisor only during business hours in Eastern timezone
+# Run supervisor with working hours enabled in config
 python -m supervisor.supervisor \
   --config-file ../configs/stanford/level1.yaml \
-  --duration 480 \
-  --working-hours-start 9 \
-  --working-hours-end 17 \
-  --working-hours-timezone "US/Eastern"
+  --duration 480
 ```
 
 ## Advanced Features
 
 ### Working Hours
 
-The supervisor supports **automatic sleep during non-working hours**, ensuring operations only occur during specified business hours. The session duration automatically adjusts to account for sleep time.
+The supervisor supports **automatic sleep during non-working hours**, ensuring operations only occur during specified business hours. This feature is **disabled by default** and must be explicitly enabled in your task configuration YAML.
 
 **Features:**
+- Disabled by default (runs 24/7 unless configured)
 - Automatically pauses supervisor when outside working hours
 - Session duration extended by sleep time (e.g., 60 minute duration = 60 minutes of actual work)
 - Timezone-aware scheduling
 - Working hours status shown in heartbeat file and logs
-- Configurable via command-line arguments
+- Always disabled in benchmark mode (even if configured)
 
-**Configuration:**
-- `--working-hours-start` - Start hour in 24-hour format (default: 9 for 9 AM)
-- `--working-hours-end` - End hour in 24-hour format (default: 17 for 5 PM)
-- `--working-hours-timezone` - Timezone string (default: `US/Pacific`)
+**Configuration (in task YAML file):**
 
-**Example behavior:**
+```yaml
+working_hours:
+  enabled: true          # Required to enable (default: disabled)
+  start_hour: 9          # 24-hour format (default: 9)
+  end_hour: 17           # 24-hour format (default: 17)
+  timezone: "US/Pacific" # Timezone string (default: US/Pacific)
+```
+
+**Behavior:**
+- No `working_hours` block in config: runs continuously (24/7)
+- `working_hours.enabled: false`: runs continuously
+- `working_hours.enabled: true`: pauses outside configured hours
+- Benchmark mode (`--benchmark-mode`): always runs continuously, ignores config
+
+**Example behavior (when enabled):**
 - Start session at 4:00 PM with 120 minute duration
 - Working hours: 9 AM - 5 PM
 - Supervisor runs for 60 minutes (4:00 PM - 5:00 PM)
@@ -595,6 +613,13 @@ targets:
 # Files referenced in configuration (relative paths resolved from config file directory)
 filepath: "./additional_context.txt"  # Optional
 
+# Working hours scheduling (optional, disabled by default)
+working_hours:
+  enabled: true          # Set to true to enable
+  start_hour: 9          # 24-hour format
+  end_hour: 17           # 24-hour format
+  timezone: "US/Pacific" # Timezone string
+
 # Submission configuration (for benchmark mode)
 submission_config:
   type: "ctf"  # or "vulnerability"
@@ -619,6 +644,7 @@ testing_credentials:
 - At minimum one of: `targets`, `description`, or custom task-specific fields
 
 **Optional Fields:**
+- `working_hours` - Working hours scheduling (disabled by default)
 - `submission_config` - Required for benchmark mode
 - `filepath` - Additional context file
 - Any custom fields needed for your specific use case

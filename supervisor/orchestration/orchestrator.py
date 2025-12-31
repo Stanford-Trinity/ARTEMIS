@@ -29,9 +29,9 @@ class SupervisorOrchestrator:
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
                  benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False,
-                 working_hours_start: int = 9, working_hours_end: int = 17, working_hours_timezone: str = "US/Pacific",
+                 working_hours_config: Optional[Dict[str, Any]] = None,
                  finish_on_submit: bool = False):
-        
+
         self.config = config
         self.session_dir = session_dir
         self.supervisor_model = supervisor_model
@@ -42,13 +42,17 @@ class SupervisorOrchestrator:
         self.skip_todos = skip_todos
         self.use_prompt_generation = use_prompt_generation
         self.finish_on_submit = finish_on_submit
-        
-        # Initialize working hours manager
-        self.working_hours = WorkingHoursManager(
-            start_hour=working_hours_start,
-            end_hour=working_hours_end,
-            timezone_str=working_hours_timezone
-        )
+
+        # Working hours scheduling (disabled by default, always disabled in benchmark mode)
+        self.working_hours: Optional[WorkingHoursManager] = None
+        if (working_hours_config
+                and working_hours_config.get('enabled')
+                and not benchmark_mode):
+            self.working_hours = WorkingHoursManager(
+                start_hour=working_hours_config.get('start_hour', 9),
+                end_hour=working_hours_config.get('end_hour', 17),
+                timezone_str=working_hours_config.get('timezone', 'US/Pacific')
+            )
         
         self.instance_manager = InstanceManager(session_dir, codex_binary, use_prompt_generation=use_prompt_generation)
         self.log_reader = LogReader(session_dir, self.instance_manager)
@@ -129,14 +133,17 @@ class SupervisorOrchestrator:
         
         logging.info(f"🎯 Supervisor starting {self.duration_minutes}min session")
         logging.info(f"📅 Session will end at: {end_time.strftime('%Y-%m-%d %H:%M:%S UTC')}")
-        
-        # Log working hours information
-        working_status = self.working_hours.get_status_info()
-        logging.info(f"🕐 Working hours: {working_status['working_hours']}")
-        if working_status['in_working_hours']:
-            logging.info(f"✅ Currently in working hours, time until end: {working_status['time_until_end']}")
+
+        # Log working hours status
+        if self.working_hours:
+            status = self.working_hours.get_status_info()
+            logging.info(f"Working hours enabled: {status['working_hours']}")
+            if status['in_working_hours']:
+                logging.info(f"Currently in working hours, ends in: {status['time_until_end']}")
+            else:
+                logging.info(f"Outside working hours, resumes at: {status['next_working_time']}")
         else:
-            logging.info(f"⏰ Currently outside working hours, next working time: {working_status['next_working_time']}")
+            logging.info("Working hours disabled, running continuously")
         
         await self._save_session_metadata(start_time, end_time)
         
@@ -146,16 +153,15 @@ class SupervisorOrchestrator:
             try:
                 iteration += 1
                 logging.info(f"🔄 Supervisor iteration {iteration}")
-                
-                # Check working hours and sleep if necessary
-                sleep_duration, wake_time = await self.working_hours.wait_for_working_hours()
-                if sleep_duration.total_seconds() > 0:
-                    self.sleep_time_outside_hours += sleep_duration
-                    logging.info(f"⏱️  Total sleep time outside working hours: {self._format_duration(self.sleep_time_outside_hours)}")
-                    
-                    # Update heartbeat after waking up
-                    await self._update_heartbeat(iteration, start_time, sleeping=False)
-                
+
+                # Sleep until working hours if configured
+                if self.working_hours:
+                    sleep_duration, _ = await self.working_hours.wait_for_working_hours()
+                    if sleep_duration.total_seconds() > 0:
+                        self.sleep_time_outside_hours += sleep_duration
+                        logging.info(f"Slept {self._format_duration(sleep_duration)} outside working hours")
+                        await self._update_heartbeat(iteration, start_time, sleeping=False)
+
                 await self._update_heartbeat(iteration, start_time, sleeping=False)
                 
                 user_message = await self._generate_instance_update_message()
@@ -416,8 +422,17 @@ class SupervisorOrchestrator:
     
     async def _update_heartbeat(self, iteration: int, start_time: datetime, sleeping: bool = False):
         """Update supervisor heartbeat file."""
-        working_status = self.working_hours.get_status_info()
-        
+        if self.working_hours:
+            status = self.working_hours.get_status_info()
+            working_hours_info = {
+                "enabled": True,
+                "config": status['working_hours'],
+                "in_working_hours": status['in_working_hours'],
+                "total_sleep_time": self._format_duration(self.sleep_time_outside_hours)
+            }
+        else:
+            working_hours_info = {"enabled": False}
+
         heartbeat = {
             "supervisor_pid": os.getpid(),
             "session_dir": str(self.session_dir),
@@ -426,11 +441,7 @@ class SupervisorOrchestrator:
             "start_time": start_time.isoformat(),
             "active_instances": len([i for i in self.instance_manager.instances.values() if i["status"] == "running"]),
             "status": "sleeping" if sleeping else "running",
-            "working_hours": {
-                "config": working_status['working_hours'],
-                "in_working_hours": working_status['in_working_hours'],
-                "total_sleep_time": self._format_duration(self.sleep_time_outside_hours)
-            }
+            "working_hours": working_hours_info
         }
         
         try:
