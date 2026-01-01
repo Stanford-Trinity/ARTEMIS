@@ -13,8 +13,9 @@ import sys
 from dotenv import load_dotenv
 load_dotenv()
 
-from .orchestration import SupervisorOrchestrator
-from .todo_generator import TodoGenerator
+from supervisor.orchestration import SupervisorOrchestrator
+from supervisor.todo_generator import TodoGenerator
+from supervisor.config import WorkingHoursConfig
 
 def setup_logging(session_dir: Path, verbose: bool = False):
     """Setup logging for the supervisor."""
@@ -178,7 +179,7 @@ async def main():
         benchmark_mode=args.benchmark_mode,
         skip_todos=args.skip_todos,
         use_prompt_generation=args.use_prompt_generation,
-        working_hours_config=config.get('working_hours'),
+        working_hours_config=WorkingHoursConfig.model_validate(config.get('working_hours', {})),
         finish_on_submit=args.finish_on_submit
     )
     

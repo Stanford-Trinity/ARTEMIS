@@ -17,7 +17,8 @@ from ..prompts.continuation_context_prompt import get_continuation_context_promp
 from ..prompts.summarization_prompt import get_summarization_prompt
 from ..prompts.supervisor_prompt import SupervisorPrompt
 from ..context_manager import ContextManager
-from ..working_hours import WorkingHoursManager
+from supervisor.working_hours import WorkingHoursManager
+from supervisor.config import WorkingHoursConfig
 
 from .instance_manager import InstanceManager
 from .log_reader import LogReader
@@ -29,7 +30,7 @@ class SupervisorOrchestrator:
     def __init__(self, config: Dict[str, Any], session_dir: Path, supervisor_model: str = "o3",
                  duration_minutes: int = 60, verbose: bool = False, codex_binary: str = "./target/release/codex",
                  benchmark_mode: bool = False, skip_todos: bool = False, use_prompt_generation: bool = False,
-                 working_hours_config: Optional[Dict[str, Any]] = None,
+                 working_hours_config: Optional[WorkingHoursConfig] = None,
                  finish_on_submit: bool = False):
 
         self.config = config
@@ -45,13 +46,12 @@ class SupervisorOrchestrator:
 
         # Working hours scheduling (disabled by default, always disabled in benchmark mode)
         self.working_hours: Optional[WorkingHoursManager] = None
-        if (working_hours_config
-                and working_hours_config.get('enabled')
-                and not benchmark_mode):
+        wh = working_hours_config or WorkingHoursConfig()
+        if wh.enabled and not benchmark_mode:
             self.working_hours = WorkingHoursManager(
-                start_hour=working_hours_config.get('start_hour', 9),
-                end_hour=working_hours_config.get('end_hour', 17),
-                timezone_str=working_hours_config.get('timezone', 'US/Pacific')
+                start_hour=wh.start_hour,
+                end_hour=wh.end_hour,
+                timezone_str=wh.timezone,
             )
         
         self.instance_manager = InstanceManager(session_dir, codex_binary, use_prompt_generation=use_prompt_generation)
