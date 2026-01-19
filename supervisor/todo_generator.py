@@ -14,26 +14,41 @@ from openai import AsyncOpenAI
 
 
 class TodoGenerator:
-    def __init__(self, api_key: str, use_openrouter: bool = None):
-        """Initialize TODO generator with API key."""
+    def __init__(self, api_key: str, provider: str = None):
+        """Initialize TODO generator with API key.
+
+        Args:
+            api_key: API key for the provider
+            provider: One of "azure", "openrouter", or "openai"
+        """
         # Auto-detect provider if not specified
-        if use_openrouter is None:
-            use_openrouter = api_key.startswith('sk-or-') or 'openrouter' in api_key.lower()
-        
-        base_url = "https://openrouter.ai/api/v1" if use_openrouter else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
-        
-        # Store provider type for later use
-        self.use_openrouter = use_openrouter
-        
-        # Set model based on provider with environment variable override
-        if use_openrouter:
+        if provider is None:
+            if api_key.startswith('sk-or-') or 'openrouter' in api_key.lower():
+                provider = "openrouter"
+            else:
+                provider = "openai"
+
+        self.provider = provider
+
+        # Initialize client based on provider
+        if provider == "azure":
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
+            )
+            self.model = os.getenv("TODO_GENERATOR_AZURE_MODEL", "gpt-4")
+        elif provider == "openrouter":
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://openrouter.ai/api/v1"
+            )
             self.model = os.getenv("TODO_GENERATOR_OPENROUTER_MODEL", "anthropic/claude-opus-4.1")
-        else:
+        else:  # openai
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url="https://api.openai.com/v1"
+            )
             self.model = os.getenv("TODO_GENERATOR_OPENAI_MODEL", "gpt-5")
         
     async def generate_todos_from_config(self, config_content: str) -> List[Dict[str, Any]]:
@@ -76,15 +91,18 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
             }
-            
-            # Only set temperature for OpenRouter, OpenAI's newer models don't support custom temperature
-            if self.use_openrouter:
+
+            # Provider-specific parameters
+            if self.provider == "azure":
+                # Azure supports both temperature and max_tokens
                 completion_params["temperature"] = 0.7
-            
-            # OpenRouter uses max_tokens, OpenAI direct uses max_completion_tokens for newer models
-            if self.use_openrouter:
                 completion_params["max_tokens"] = 20000
-            else:
+            elif self.provider == "openrouter":
+                # OpenRouter supports temperature and max_tokens
+                completion_params["temperature"] = 0.7
+                completion_params["max_tokens"] = 20000
+            else:  # openai
+                # OpenAI direct uses max_completion_tokens for newer models
                 completion_params["max_completion_tokens"] = 20000
                 
             response = await self.client.chat.completions.create(**completion_params)
@@ -180,9 +198,9 @@ if __name__ == "__main__":
     config_file = Path(sys.argv[1])
     output_file = Path(sys.argv[2])
     
-    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
     if not api_key:
-        print("Error: Either OPENROUTER_API_KEY or OPENAI_API_KEY environment variable must be set")
+        print("Error: Either OPENROUTER_API_KEY, OPENAI_API_KEY, or AZURE_OPENAI_API_KEY environment variable must be set")
         sys.exit(1)
-    
+
     asyncio.run(generate_pentest_todos(config_file, output_file, api_key))

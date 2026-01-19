@@ -64,7 +64,7 @@ class SupervisorOrchestrator:
                 session_dir=session_dir,
                 task_config=config,
                 supervisor_model=supervisor_model,
-                api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY"),
+                api_key=os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY"),
                 codex_binary=codex_binary
             )
         
@@ -83,15 +83,24 @@ class SupervisorOrchestrator:
         )
         
         self.continuation_count = 0
-        
-        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key
-        )
+
+        # Initialize API client based on provider
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+
+        if os.getenv("AZURE_OPENAI_API_KEY"):
+            # Azure OpenAI configuration
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
+            )
+        else:
+            # OpenRouter or OpenAI direct
+            base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+            self.client = AsyncOpenAI(
+                base_url=base_url,
+                api_key=api_key
+            )
         
         self.conversation_history = []
         self.running = False
@@ -313,9 +322,13 @@ class SupervisorOrchestrator:
     async def _switch_to_random_model(self) -> None:
         """Switch to a random different model."""
         import random
-        
+
         # Different model lists based on API provider
-        if os.getenv("OPENROUTER_API_KEY"):
+        if os.getenv("AZURE_OPENAI_API_KEY"):
+            # Use environment variable or default Azure deployment names
+            default_models = "gpt-4,gpt-4-turbo,gpt-35-turbo"
+            available_models = os.getenv("AZURE_AVAILABLE_MODELS", default_models).split(",")
+        elif os.getenv("OPENROUTER_API_KEY"):
             # Use environment variable or default OpenRouter models
             default_models = "anthropic/claude-sonnet-4,openai/o3,anthropic/claude-opus-4,google/gemini-2.5-pro,openai/o3-pro"
             available_models = os.getenv("OPENROUTER_AVAILABLE_MODELS", default_models).split(",")

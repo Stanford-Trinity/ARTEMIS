@@ -2,6 +2,8 @@
 <p align="center"><strong>A</strong>utomated <strong>R</strong>ed <strong>T</strong>eaming <strong>E</strong>ngine with <strong>M</strong>ulti-agent <strong>I</strong>ntelligent <strong>S</strong>upervision</p>
 <p align="center">ARTEMIS is an autonomous agent created by the <a href="https://trinity.cs.stanford.edu/">Stanford Trinity project</a> to automate vulnerability discovery.</p>
 
+> **API Provider Support:** ARTEMIS supports multiple AI providers including OpenRouter, OpenAI, and Azure OpenAI. See the [Azure Setup Guide](docs/AZURE_SETUP.md) for Azure-specific configuration.
+
 #### Quickstart
 
 Install `uv` if you haven't already:
@@ -51,7 +53,8 @@ cp .env.example .env
 ```
 
 Required environment variables:
-- `OPENROUTER_API_KEY` or `OPENAI_API_KEY` - For the supervisor and LLM calls
+- `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or `AZURE_OPENAI_API_KEY` - For the supervisor and LLM calls
+  - For Azure OpenAI, also set `AZURE_OPENAI_ENDPOINT` (see [Azure Setup Guide](docs/AZURE_SETUP.md))
 - `SUBAGENT_MODEL` - Model to use for spawned Codex instances (e.g., `anthropic/claude-sonnet-4`)
 
 ### Quick Test Run
@@ -92,7 +95,8 @@ cp .env.example .env
 ```
 
 Required environment variables:
-- `OPENROUTER_API_KEY` or `OPENAI_API_KEY` - For the supervisor and LLM calls
+- `OPENROUTER_API_KEY`, `OPENAI_API_KEY`, or `AZURE_OPENAI_API_KEY` - For the supervisor and LLM calls
+  - For Azure OpenAI, also set `AZURE_OPENAI_ENDPOINT` (see [Azure Setup Guide](docs/AZURE_SETUP.md))
 - `SUBAGENT_MODEL` - Model to use for spawned Codex instances (e.g., `anthropic/claude-sonnet-4`)
 
 ### Codex Configuration for OpenRouter

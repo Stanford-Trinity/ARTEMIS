@@ -12,25 +12,36 @@ class TaskRouter:
     def __init__(self, router_model: str = None):
         # Use environment variable or default model
         if router_model is None:
-            if os.getenv("OPENROUTER_API_KEY"):
+            if os.getenv("AZURE_OPENAI_API_KEY"):
+                router_model = os.getenv("ROUTER_MODEL", "gpt-4")
+            elif os.getenv("OPENROUTER_API_KEY"):
                 router_model = os.getenv("ROUTER_MODEL", "openai/o4-mini")
             else:
                 router_model = os.getenv("ROUTER_MODEL", "o4-mini")
-        
+
         # Adjust model name if using OpenAI directly
-        if not os.getenv("OPENROUTER_API_KEY") and router_model.startswith("openai/"):
+        if not os.getenv("OPENROUTER_API_KEY") and not os.getenv("AZURE_OPENAI_API_KEY") and router_model.startswith("openai/"):
             self.router_model = router_model.replace("openai/", "")  # Remove openai/ prefix for direct OpenAI API
         else:
             self.router_model = router_model
-        
-        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+
+        # Initialize API client based on provider
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+
+        if os.getenv("AZURE_OPENAI_API_KEY"):
+            # Azure OpenAI configuration
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
+            )
+        else:
+            # OpenRouter or OpenAI direct
+            base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                base_url=base_url
+            )
         
         # Custom specialist agents
         self.specialists = [

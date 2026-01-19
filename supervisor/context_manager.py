@@ -25,25 +25,35 @@ class ContextManager:
             self.summarization_model = os.getenv("SUMMARIZATION_MODEL")
         else:
             # Default model based on which API is being used
-            if os.getenv("OPENROUTER_API_KEY"):
+            if os.getenv("AZURE_OPENAI_API_KEY"):
+                self.summarization_model = "gpt-4"  # Azure deployment name
+            elif os.getenv("OPENROUTER_API_KEY"):
                 self.summarization_model = "openai/o4-mini"  # OpenRouter format
             else:
                 self.summarization_model = "o4-mini"  # OpenAI direct format
-        
+
         try:
             self.tokenizer = tiktoken.get_encoding("o200k_base")
         except KeyError:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
-        
-        
-        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key
-        )
+
+        # Initialize API client based on provider
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
+
+        if os.getenv("AZURE_OPENAI_API_KEY"):
+            # Azure OpenAI configuration
+            self.client = AsyncOpenAI(
+                api_key=api_key,
+                azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
+                api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
+            )
+        else:
+            # OpenRouter or OpenAI direct
+            base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
+            self.client = AsyncOpenAI(
+                base_url=base_url,
+                api_key=api_key
+            )
         
         logging.info(f"🧠 ContextManager initialized: {max_tokens:,} max tokens, {buffer_tokens:,} buffer (triggers at {max_tokens - buffer_tokens:,})")
     
