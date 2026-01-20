@@ -8,7 +8,7 @@ import tiktoken
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 import os
 from .prompts.summarization_prompt import get_summarization_prompt
 
@@ -41,8 +41,8 @@ class ContextManager:
         api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
 
         if os.getenv("AZURE_OPENAI_API_KEY"):
-            # Azure OpenAI configuration
-            self.client = AsyncOpenAI(
+            # Azure OpenAI configuration - uses AsyncAzureOpenAI class
+            self.client = AsyncAzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")

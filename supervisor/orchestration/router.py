@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from typing import Dict, Any
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 
 
 class TaskRouter:
@@ -29,8 +29,8 @@ class TaskRouter:
         api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
 
         if os.getenv("AZURE_OPENAI_API_KEY"):
-            # Azure OpenAI configuration
-            self.client = AsyncOpenAI(
+            # Azure OpenAI configuration - uses AsyncAzureOpenAI class
+            self.client = AsyncAzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")

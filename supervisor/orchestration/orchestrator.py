@@ -11,7 +11,7 @@ import signal
 import psutil
 import aiofiles
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, AsyncAzureOpenAI
 from ..tools import SupervisorTools
 from ..prompts.continuation_context_prompt import get_continuation_context_prompt
 from ..prompts.summarization_prompt import get_summarization_prompt
@@ -88,8 +88,8 @@ class SupervisorOrchestrator:
         api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY") or os.getenv("AZURE_OPENAI_API_KEY")
 
         if os.getenv("AZURE_OPENAI_API_KEY"):
-            # Azure OpenAI configuration
-            self.client = AsyncOpenAI(
+            # Azure OpenAI configuration - uses AsyncAzureOpenAI class
+            self.client = AsyncAzureOpenAI(
                 api_key=api_key,
                 azure_endpoint=os.getenv("AZURE_OPENAI_ENDPOINT"),
                 api_version=os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-01-preview")
