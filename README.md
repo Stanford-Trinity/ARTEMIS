@@ -66,6 +66,20 @@ export BEDROCK_MODEL_ID=anthropic.claude-opus-4-5-20240620-v1:0
 
 AWS credentials can be provided via standard AWS environment variables or IAM role-based auth.
 
+#### Bedrock Bearer Token (Runtime API Key)
+
+If you have a Bedrock bearer token, set it via `AWS_BEARER_TOKEN_BEDROCK` and use an on-demand model in your region.
+Non-Anthropic models are invoked via the Bedrock Converse API automatically.
+
+Example (on-demand model in us-east-2):
+
+```bash
+export LLM_PROVIDER=bedrock
+export BEDROCK_REGION=us-east-2
+export BEDROCK_MODEL_ID=meta.llama3-3-70b-instruct-v1:0
+export AWS_BEARER_TOKEN_BEDROCK="bedrock-api-key-..."
+```
+
 ### Quick Test Run
 
 Try a simple CTF challenge to verify everything works:
