@@ -11,7 +11,7 @@ import signal
 import psutil
 import aiofiles
 
-from openai import AsyncOpenAI
+from supervisor.llm_client import DEFAULT_BEDROCK_MODEL_ID, LLMClient, get_provider
 from ..tools import SupervisorTools
 from ..prompts.continuation_context_prompt import get_continuation_context_prompt
 from ..prompts.summarization_prompt import get_summarization_prompt
@@ -88,14 +88,8 @@ class SupervisorOrchestrator:
         
         self.continuation_count = 0
         
-        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key
-        )
+        self.provider = get_provider()
+        self.client = LLMClient(provider=self.provider)
         
         self.conversation_history = []
         self.running = False
@@ -281,21 +275,14 @@ class SupervisorOrchestrator:
 
         try:
             # Use correct parameters based on API provider
-            completion_params = {
-                "model": self.context_manager.summarization_model,
-                "messages": [{"role": "user", "content": summary_prompt}],
-            }
+            response = await self.context_manager.client.chat(
+                model=self.context_manager.summarization_model,
+                messages=[{"role": "user", "content": summary_prompt}],
+                temperature=0.1,
+                max_tokens=10000,
+            )
             
-            # Only set temperature and max_tokens for OpenRouter
-            if os.getenv("OPENROUTER_API_KEY"):
-                completion_params["temperature"] = 0.1
-                completion_params["max_tokens"] = 10000
-            else:
-                completion_params["max_completion_tokens"] = 10000
-                
-            response = await self.context_manager.client.chat.completions.create(**completion_params)
-            
-            return response.choices[0].message.content or "Summary generation failed"
+            return response.content or "Summary generation failed"
             
         except Exception as e:
             logging.error(f"❌ Orchestrator: Continuation summary failed: {type(e).__name__}: {e}")
@@ -321,10 +308,13 @@ class SupervisorOrchestrator:
         import random
         
         # Different model lists based on API provider
-        if os.getenv("OPENROUTER_API_KEY"):
+        if self.provider == "openrouter":
             # Use environment variable or default OpenRouter models
             default_models = "anthropic/claude-sonnet-4,openai/o3,anthropic/claude-opus-4,google/gemini-2.5-pro,openai/o3-pro"
             available_models = os.getenv("OPENROUTER_AVAILABLE_MODELS", default_models).split(",")
+        elif self.provider == "bedrock":
+            default_models = DEFAULT_BEDROCK_MODEL_ID
+            available_models = os.getenv("BEDROCK_AVAILABLE_MODELS", default_models).split(",")
         else:
             # Use environment variable or default OpenAI direct models
             default_models = "o3,gpt-5"
@@ -366,30 +356,21 @@ class SupervisorOrchestrator:
     async def _get_supervisor_response(self, instance_responses: Dict[str, str] = None) -> Optional[str]:
         """Get a response from the supervisor model."""
         try:
-            # Use correct parameters based on API provider
-            completion_params = {
-                "model": self.supervisor_model,
-                "messages": self.conversation_history,
-                "tools": self.tools.get_tool_definitions(),
-                "tool_choice": "auto",
-            }
+            response = await self.client.chat(
+                model=self.supervisor_model,
+                messages=self.conversation_history,
+                tools=self.tools.get_tool_definitions(),
+                tool_choice="auto",
+                max_tokens=10000,
+            )
             
-            # Only set max_tokens for OpenRouter
-            if os.getenv("OPENROUTER_API_KEY"):
-                completion_params["max_tokens"] = 10000
-            else:
-                completion_params["max_completion_tokens"] = 10000
-                
-            response = await self.client.chat.completions.create(**completion_params)
+            content = response.content or ""
             
-            message = response.choices[0].message
-            content = message.content or ""
-            
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    tool_name = tool_call.function.name
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.name
                     try:
-                        arguments = json.loads(tool_call.function.arguments)
+                        arguments = json.loads(tool_call.arguments)
                     except json.JSONDecodeError:
                         arguments = {}
                     
@@ -463,7 +444,7 @@ class SupervisorOrchestrator:
             },
             "supervisor_config": {
                 "model": self.supervisor_model,
-                "api_provider": "openrouter",
+                "api_provider": self.provider,
                 "verbose": self.verbose
             },
             "codex_config": {
@@ -693,40 +674,27 @@ class SupervisorOrchestrator:
                     self.conversation_history, preserve_recent=20
                 )
             
-            # Use correct parameters based on API provider
-            completion_params = {
-                "model": self.supervisor_model,
-                "messages": self.conversation_history,
-                "tools": self.tools.get_tool_definitions(),
-                "tool_choice": "auto",
-            }
+            response = await self.client.chat(
+                model=self.supervisor_model,
+                messages=self.conversation_history,
+                tools=self.tools.get_tool_definitions(),
+                tool_choice="auto",
+                max_tokens=10000,
+            )
             
-            # Only set max_tokens for OpenRouter
-            if os.getenv("OPENROUTER_API_KEY"):
-                completion_params["max_tokens"] = 10000
-            else:
-                completion_params["max_completion_tokens"] = 10000
-                
-            response = await self.client.chat.completions.create(**completion_params)
+            content = response.content or ""
             
-            message = response.choices[0].message
-            content = message.content or ""
-            
-            if not content.strip() and not message.tool_calls:
-                try:
-                    response_dict = response.model_dump()
-                    logging.error(f"❌ EMPTY RESPONSE from {self.supervisor_model}. Full OpenRouter response: {response_dict}")
-                except Exception as e:
-                    logging.error(f"❌ EMPTY RESPONSE from {self.supervisor_model}. Could not serialize response: {e}")
+            if not content.strip() and not response.tool_calls:
+                logging.error(f"❌ EMPTY RESPONSE from {self.supervisor_model}.")
             
             session_finished = False
             tool_calls_data = []
             
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    tool_name = tool_call.function.name
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.name
                     try:
-                        arguments = json.loads(tool_call.function.arguments)
+                        arguments = json.loads(tool_call.arguments)
                     except json.JSONDecodeError:
                         arguments = {}
                     
@@ -735,7 +703,7 @@ class SupervisorOrchestrator:
                         "type": "function",
                         "function": {
                             "name": tool_name,
-                            "arguments": tool_call.function.arguments
+                            "arguments": tool_call.arguments
                         }
                     })
                     

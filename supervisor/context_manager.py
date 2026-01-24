@@ -8,9 +8,9 @@ import tiktoken
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
-from openai import AsyncOpenAI
 import os
 from .prompts.summarization_prompt import get_summarization_prompt
+from .llm_client import DEFAULT_BEDROCK_MODEL_ID, LLMClient, get_provider
 
 class ContextManager:
     """Manages conversation context and token limits for the supervisor."""
@@ -24,11 +24,13 @@ class ContextManager:
         if os.getenv("SUMMARIZATION_MODEL"):
             self.summarization_model = os.getenv("SUMMARIZATION_MODEL")
         else:
-            # Default model based on which API is being used
-            if os.getenv("OPENROUTER_API_KEY"):
-                self.summarization_model = "openai/o4-mini"  # OpenRouter format
+            provider = get_provider()
+            if provider == "openrouter":
+                self.summarization_model = "openai/o4-mini"
+            elif provider == "bedrock":
+                self.summarization_model = os.getenv("BEDROCK_MODEL_ID", DEFAULT_BEDROCK_MODEL_ID)
             else:
-                self.summarization_model = "o4-mini"  # OpenAI direct format
+                self.summarization_model = "o4-mini"
         
         try:
             self.tokenizer = tiktoken.get_encoding("o200k_base")
@@ -36,14 +38,7 @@ class ContextManager:
             self.tokenizer = tiktoken.get_encoding("cl100k_base")
         
         
-        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            base_url=base_url,
-            api_key=api_key
-        )
+        self.client = LLMClient()
         
         logging.info(f"🧠 ContextManager initialized: {max_tokens:,} max tokens, {buffer_tokens:,} buffer (triggers at {max_tokens - buffer_tokens:,})")
     
@@ -200,21 +195,14 @@ class ContextManager:
         
         try:
             # Use correct parameters based on API provider
-            completion_params = {
-                "model": self.summarization_model,
-                "messages": [{"role": "user", "content": summary_prompt}],
-            }
+            response = await self.client.chat(
+                model=self.summarization_model,
+                messages=[{"role": "user", "content": summary_prompt}],
+                temperature=0.1,
+                max_tokens=10000,
+            )
             
-            # Only set temperature and max_tokens for OpenRouter
-            if os.getenv("OPENROUTER_API_KEY"):
-                completion_params["temperature"] = 0.1
-                completion_params["max_tokens"] = 10000
-            else:
-                completion_params["max_completion_tokens"] = 10000
-                
-            response = await self.client.chat.completions.create(**completion_params)
-            
-            return response.choices[0].message.content or "Summary generation failed"
+            return response.content or "Summary generation failed"
             
         except Exception as e:
             logging.error(f"❌ ContextManager: Summarization failed: {type(e).__name__}: {e}")

@@ -3,7 +3,8 @@ import json
 import logging
 import os
 from typing import Dict, Any
-from openai import AsyncOpenAI
+
+from supervisor.llm_client import DEFAULT_BEDROCK_MODEL_ID, LLMClient, get_provider
 
 
 class TaskRouter:
@@ -11,26 +12,22 @@ class TaskRouter:
     
     def __init__(self, router_model: str = None):
         # Use environment variable or default model
+        provider = get_provider()
         if router_model is None:
-            if os.getenv("OPENROUTER_API_KEY"):
+            if provider == "openrouter":
                 router_model = os.getenv("ROUTER_MODEL", "openai/o4-mini")
+            elif provider == "bedrock":
+                router_model = os.getenv("ROUTER_MODEL", os.getenv("BEDROCK_MODEL_ID", DEFAULT_BEDROCK_MODEL_ID))
             else:
                 router_model = os.getenv("ROUTER_MODEL", "o4-mini")
         
         # Adjust model name if using OpenAI directly
-        if not os.getenv("OPENROUTER_API_KEY") and router_model.startswith("openai/"):
+        if provider == "openai" and router_model.startswith("openai/"):
             self.router_model = router_model.replace("openai/", "")  # Remove openai/ prefix for direct OpenAI API
         else:
             self.router_model = router_model
         
-        # Try OPENROUTER_API_KEY first, fallback to OPENAI_API_KEY
-        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = "https://openrouter.ai/api/v1" if os.getenv("OPENROUTER_API_KEY") else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+        self.client = LLMClient(provider=provider)
         
         # Custom specialist agents
         self.specialists = [
@@ -52,28 +49,20 @@ class TaskRouter:
             prompt = get_router_prompt(task_description, self.specialists)
             
             try:
-                # Use correct parameters based on API provider
-                completion_params = {
-                    "model": self.router_model,
-                    "messages": [
+                response = await self.client.chat(
+                    model=self.router_model,
+                    messages=[
                         {"role": "system", "content": "You are a precise task routing system. Always respond with valid JSON."},
-                        {"role": "user", "content": prompt}
+                        {"role": "user", "content": prompt},
                     ],
-                }
-                
-                # Only set temperature and max_tokens for OpenRouter
-                if os.getenv("OPENROUTER_API_KEY"):
-                    completion_params["temperature"] = 0.1
-                    completion_params["max_tokens"] = 10000
-                else:
-                    completion_params["max_completion_tokens"] = 10000
-                    
-                response = await self.client.chat.completions.create(**completion_params)
+                    temperature=0.1,
+                    max_tokens=10000,
+                )
             except Exception as api_error:
                 logging.error(f"❌ TaskRouter: API call failed: {type(api_error).__name__}: {api_error}")
                 return {"specialist": "generalist"}
             
-            content = response.choices[0].message.content.strip()
+            content = response.content.strip()
             
             # Clean up response if it has markdown code blocks
             if content.startswith("```json"):

@@ -54,6 +54,18 @@ Required environment variables:
 - `OPENROUTER_API_KEY` or `OPENAI_API_KEY` - For the supervisor and LLM calls
 - `SUBAGENT_MODEL` - Model to use for spawned Codex instances (e.g., `anthropic/claude-sonnet-4`)
 
+### Amazon Bedrock Configuration
+
+To use Bedrock (Claude Opus 4.5), set:
+
+```bash
+export LLM_PROVIDER=bedrock
+export BEDROCK_REGION=us-east-1
+export BEDROCK_MODEL_ID=anthropic.claude-opus-4-5-20240620-v1:0
+```
+
+AWS credentials can be provided via standard AWS environment variables or IAM role-based auth.
+
 ### Quick Test Run
 
 Try a simple CTF challenge to verify everything works:
@@ -94,6 +106,8 @@ cp .env.example .env
 Required environment variables:
 - `OPENROUTER_API_KEY` or `OPENAI_API_KEY` - For the supervisor and LLM calls
 - `SUBAGENT_MODEL` - Model to use for spawned Codex instances (e.g., `anthropic/claude-sonnet-4`)
+
+To use Bedrock in Docker, pass `LLM_PROVIDER=bedrock` plus `BEDROCK_REGION` and `BEDROCK_MODEL_ID` in your `.env`.
 
 ### Codex Configuration for OpenRouter
 
@@ -173,4 +187,3 @@ This project uses [OpenAI Codex](https://github.com/openai/codex) as a base, for
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-

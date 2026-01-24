@@ -8,31 +8,22 @@ import os
 import aiofiles
 import asyncio
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
-from openai import AsyncOpenAI
+
+from .llm_client import DEFAULT_BEDROCK_MODEL_ID, LLMClient, get_provider
 
 
 class TodoGenerator:
-    def __init__(self, api_key: str, use_openrouter: bool = None):
-        """Initialize TODO generator with API key."""
-        # Auto-detect provider if not specified
-        if use_openrouter is None:
-            use_openrouter = api_key.startswith('sk-or-') or 'openrouter' in api_key.lower()
-        
-        base_url = "https://openrouter.ai/api/v1" if use_openrouter else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
-        
-        # Store provider type for later use
-        self.use_openrouter = use_openrouter
-        
-        # Set model based on provider with environment variable override
-        if use_openrouter:
+    def __init__(self, provider: Optional[str] = None):
+        """Initialize TODO generator with provider-specific configuration."""
+        self.client = LLMClient(provider=provider)
+        self.provider = self.client.provider
+
+        if self.provider == "openrouter":
             self.model = os.getenv("TODO_GENERATOR_OPENROUTER_MODEL", "anthropic/claude-opus-4.1")
+        elif self.provider == "bedrock":
+            self.model = os.getenv("TODO_GENERATOR_BEDROCK_MODEL", DEFAULT_BEDROCK_MODEL_ID)
         else:
             self.model = os.getenv("TODO_GENERATOR_OPENAI_MODEL", "gpt-5")
         
@@ -72,24 +63,14 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
 
         try:
             # Use correct parameter name based on provider
-            completion_params = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-            }
+            response = await self.client.chat(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=20000,
+            )
             
-            # Only set temperature for OpenRouter, OpenAI's newer models don't support custom temperature
-            if self.use_openrouter:
-                completion_params["temperature"] = 0.7
-            
-            # OpenRouter uses max_tokens, OpenAI direct uses max_completion_tokens for newer models
-            if self.use_openrouter:
-                completion_params["max_tokens"] = 20000
-            else:
-                completion_params["max_completion_tokens"] = 20000
-                
-            response = await self.client.chat.completions.create(**completion_params)
-            
-            response_content = response.choices[0].message.content.strip()
+            response_content = response.content.strip()
             if response_content.startswith("```json"):
                 start = response_content.find("[")
                 end = response_content.rfind("]") + 1
@@ -155,13 +136,13 @@ IMPORTANT: Only respond with the JSON array. Do not include any other text or ex
         logging.info(f"Saved TODOs to {file_path}")
 
 
-async def generate_pentest_todos(config_file: Path, output_file: Path, api_key: str):
+async def generate_pentest_todos(config_file: Path, output_file: Path, provider: Optional[str] = None):
     """Generate penetration testing TODOs from configuration file."""
     
     async with aiofiles.open(config_file, 'r') as f:
         config_content = await f.read()
     
-    generator = TodoGenerator(api_key)
+    generator = TodoGenerator(provider=provider)
     todos = await generator.generate_todos_from_config(config_content)
     
     await generator.save_todos_to_file(todos, output_file)
@@ -180,9 +161,5 @@ if __name__ == "__main__":
     config_file = Path(sys.argv[1])
     output_file = Path(sys.argv[2])
     
-    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("Error: Either OPENROUTER_API_KEY or OPENAI_API_KEY environment variable must be set")
-        sys.exit(1)
-    
-    asyncio.run(generate_pentest_todos(config_file, output_file, api_key))
+    provider = get_provider()
+    asyncio.run(generate_pentest_todos(config_file, output_file, provider))

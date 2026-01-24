@@ -9,6 +9,7 @@ dependencies = [
     "pytz>=2023.3",
     "python-dotenv>=1.0.0",
     "openai>=2.3.0",
+    "boto3>=1.34.0",
     "tiktoken>=0.12.0",
     "pydantic>=2.12.0",
 ]
