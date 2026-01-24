@@ -8,12 +8,12 @@ import asyncio
 import json
 import logging
 import uuid
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, List
 import aiofiles
-from openai import AsyncOpenAI
+
+from supervisor.llm_client import LLMClient, get_provider
 
 from .prompts.system_prompt import get_triage_system_prompt
 from .prompts.initial_review_prompt import get_initial_review_prompt
@@ -62,15 +62,7 @@ class TriagerInstance:
         self.max_instances = 1
         self.spawned_instances = 0
         
-        # Initialize OpenAI client with fallback support
-        # Auto-detect provider based on API key
-        use_openrouter = api_key and (api_key.startswith('sk-or-') or 'openrouter' in api_key.lower())
-        base_url = "https://openrouter.ai/api/v1" if use_openrouter else "https://api.openai.com/v1"
-        
-        self.client = AsyncOpenAI(
-            api_key=api_key,
-            base_url=base_url
-        )
+        self.client = LLMClient(provider=get_provider())
         
         # Initialize triage tools with instance management
         self.triage_tools = TriageTools(
@@ -179,37 +171,28 @@ class TriagerInstance:
         try:
             tools = self.triage_tools.get_tool_definitions()
             
-            # Use correct parameters based on API provider
-            completion_params = {
-                "model": self.supervisor_model,
-                "messages": self.conversation_history,
-                "tools": tools,
-                "tool_choice": "auto",
-            }
+            response = await self.client.chat(
+                model=self.supervisor_model,
+                messages=self.conversation_history,
+                tools=tools,
+                tool_choice="auto",
+                max_tokens=10000,
+            )
             
-            # Only set max_tokens for OpenRouter
-            if os.getenv("OPENROUTER_API_KEY"):
-                completion_params["max_tokens"] = 10000
-            else:
-                completion_params["max_completion_tokens"] = 10000
-                
-            response = await self.client.chat.completions.create(**completion_params)
-            
-            message = response.choices[0].message
-            response_content = message.content or ""
+            response_content = response.content or ""
             
             # Add assistant response to conversation
             self.conversation_history.append({
                 "role": "assistant",
                 "content": response_content,
-                "tool_calls": message.tool_calls
+                "tool_calls": self.client.format_tool_calls(response.tool_calls)
             })
             
             # Handle tool calls
-            if message.tool_calls:
-                for tool_call in message.tool_calls:
-                    tool_name = tool_call.function.name
-                    arguments = json.loads(tool_call.function.arguments)
+            if response.tool_calls:
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call.name
+                    arguments = json.loads(tool_call.arguments)
                     
                     logging.info(f"🔧 Executing triage tool: {tool_name}")
                     
@@ -224,7 +207,7 @@ class TriagerInstance:
                     })
             
             # Log and save conversation
-            await self._log_conversation_entry(response_content, message.tool_calls if message.tool_calls else [])
+            await self._log_conversation_entry(response_content, response.tool_calls if response.tool_calls else [])
             await self._save_conversation_history()
             
             return True
@@ -289,7 +272,14 @@ Please review and address the issues before resubmitting."""
             
             if tool_calls:
                 for tool_call in tool_calls:
-                    log_entry += f"[{timestamp}] TOOL_CALL: {tool_call.function.name}({tool_call.function.arguments})\n"
+                    if hasattr(tool_call, "name"):
+                        name = tool_call.name
+                        arguments = tool_call.arguments
+                    else:
+                        function = tool_call.get("function", {})
+                        name = function.get("name", "unknown")
+                        arguments = function.get("arguments", "{}")
+                    log_entry += f"[{timestamp}] TOOL_CALL: {name}({arguments})\n"
             
             log_entry += "---\n"
             
@@ -313,14 +303,17 @@ Please review and address the issues before resubmitting."""
                 if "tool_calls" in message and message["tool_calls"]:
                     serialized_message["tool_calls"] = []
                     for tool_call in message["tool_calls"]:
-                        serialized_message["tool_calls"].append({
-                            "id": tool_call.id,
-                            "type": tool_call.type,
-                            "function": {
-                                "name": tool_call.function.name,
-                                "arguments": tool_call.function.arguments
-                            }
-                        })
+                        if hasattr(tool_call, "name"):
+                            serialized_message["tool_calls"].append({
+                                "id": tool_call.id,
+                                "type": "function",
+                                "function": {
+                                    "name": tool_call.name,
+                                    "arguments": tool_call.arguments,
+                                },
+                            })
+                        else:
+                            serialized_message["tool_calls"].append(tool_call)
                 
                 if "tool_call_id" in message:
                     serialized_message["tool_call_id"] = message["tool_call_id"]

@@ -16,6 +16,7 @@ load_dotenv()
 from supervisor.orchestration import SupervisorOrchestrator
 from supervisor.todo_generator import TodoGenerator
 from supervisor.config import WorkingHoursConfig
+from supervisor.llm_client import DEFAULT_BEDROCK_MODEL_ID, get_provider
 
 def setup_logging(session_dir: Path, verbose: bool = False):
     """Setup logging for the supervisor."""
@@ -98,15 +99,25 @@ async def main():
         logging.error(f"Failed to load config: {e}")
         sys.exit(1)
     
-    api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        print("❌ Either OPENROUTER_API_KEY or OPENAI_API_KEY environment variable is required")
-        print("💡 Create a .env file with: OPENROUTER_API_KEY=your-key-here")
-        print("💡 Or use: OPENAI_API_KEY=your-key-here")
-        sys.exit(1)
+    provider = get_provider()
+    if provider == "bedrock":
+        if not os.getenv("BEDROCK_MODEL_ID"):
+            print("❌ BEDROCK_MODEL_ID environment variable is required for Bedrock")
+            print("💡 Create a .env file with: BEDROCK_MODEL_ID=anthropic.claude-opus-4-5-20240620-v1:0")
+            sys.exit(1)
+    else:
+        api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            print("❌ Either OPENROUTER_API_KEY or OPENAI_API_KEY environment variable is required")
+            print("💡 Create a .env file with: OPENROUTER_API_KEY=your-key-here")
+            print("💡 Or use: OPENAI_API_KEY=your-key-here")
+            print("💡 Or set LLM_PROVIDER=bedrock with BEDROCK_MODEL_ID for Amazon Bedrock")
+            sys.exit(1)
     
-    if os.getenv("OPENROUTER_API_KEY"):
+    if provider == "openrouter":
         print("✅ OpenRouter API key found")
+    elif provider == "bedrock":
+        print("✅ Amazon Bedrock configuration found")
     else:
         print("✅ OpenAI API key found")
     
@@ -117,8 +128,10 @@ async def main():
         supervisor_model = os.getenv("SUPERVISOR_MODEL")
     else:
         # Default based on API provider
-        if os.getenv("OPENROUTER_API_KEY"):
+        if provider == "openrouter":
             supervisor_model = "openai/o4-mini"  # OpenRouter format
+        elif provider == "bedrock":
+            supervisor_model = os.getenv("BEDROCK_MODEL_ID", DEFAULT_BEDROCK_MODEL_ID)
         else:
             supervisor_model = "o4-mini"  # OpenAI direct format
     print(f"🤖 Using supervisor model: {supervisor_model}")
@@ -145,8 +158,7 @@ async def main():
         try:
             config_content = yaml.dump(config, default_flow_style=False)
             
-            use_openrouter = bool(os.getenv("OPENROUTER_API_KEY"))
-            todo_generator = TodoGenerator(api_key, use_openrouter)
+            todo_generator = TodoGenerator(provider=provider)
             initial_todos = await todo_generator.generate_todos_from_config(config_content)
             
             await todo_generator.save_todos_to_file(initial_todos, todo_file)
